@@ -1,0 +1,22 @@
+[package]
+name = "qtile-cmd-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { version = "*" }
+clap = { version = "4.5.0", features = ["derive"] }
+serde = { version = "*", features = ["derive"] }
+serde_tuple = { version = "*" }
+serde_json = { version = "*" }
+log = { version = "0.4.21" }
+strum = { version = "0.26.3", features = ["derive"] }
+strum_macros = { version = "0.26.4" }
+json = { version = "0.12.4" }
+ron = "0.8.1"
+once_cell = "1.19.0"
+itertools = "0.13.0"
+
+[[bin]]
+name = "qtile-cmd-client"
+path = "src/main.rs"
