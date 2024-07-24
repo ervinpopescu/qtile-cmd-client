@@ -20,3 +20,7 @@ itertools = "0.13.0"
 [[bin]]
 name = "qtile-cmd-client"
 path = "src/main.rs"
+
+[lib]
+name = "qtile_cmd_client_lib"
+path = "src/lib.rs"

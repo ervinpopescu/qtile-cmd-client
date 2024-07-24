@@ -1,10 +1,11 @@
-use crate::utils::graph::{ObjectType, OBJECTS, OBJ_HASHMAP};
+// use crate::utils::graph::OBJ_HASHMAP;
+use crate::utils::graph::{ObjectType, OBJECTS};
 use anyhow::bail;
+use clap::command;
 use itertools::{EitherOrBoth::*, Itertools};
-use json::{object, JsonValue};
 use serde::Deserialize;
 use serde_json::value::Number;
-use serde_json::{json, Value};
+use serde_json::Value;
 use serde_tuple::Serialize_tuple;
 use std::{collections::HashMap, str::FromStr};
 use strum::Display;
@@ -48,7 +49,7 @@ pub struct CommandParser {
 }
 
 impl CommandParser {
-    pub fn new(cli_args: Args) -> anyhow::Result<Self> {
+    pub fn from_args(cli_args: Args) -> anyhow::Result<Self> {
         // let graph_node: CommandGraphNode = CommandGraphNode::new(
         //     Selector::String("screen".to_string()),
         //     None,
@@ -61,76 +62,58 @@ impl CommandParser {
                 function,
                 args,
                 info,
-            } => match object {
-                Some(v) => {
-                    let command: String;
-                    let mut args_to_be_sent = vec![];
-                    let kwargs = HashMap::new();
-                    let lifted = true;
-                    let selectors = Self::get_object(v)?;
-                    match function {
-                        Some(s) => {
-                            if let "help" = s.as_str() {
-                                todo!()
-                            } else {
-                                command = s;
-                            }
-                        }
-                        None => match info {
-                            true => todo!(),
-                            false => {
-                                command = function.unwrap();
-                            }
-                        },
-                    }
-                    if let Some(v) = args {
-                        args_to_be_sent = v;
-                    };
-                    Ok(Self {
-                        selectors,
-                        command,
-                        args: args_to_be_sent,
-                        kwargs,
-                        lifted,
-                    })
+            } => Self::from_params(object, function, args, info),
+        }
+    }
+    pub fn from_params(
+        object: Option<Vec<String>>,
+        function: Option<String>,
+        args: Option<Vec<String>>,
+        info: bool,
+    ) -> anyhow::Result<Self> {
+        let mut command: String = String::new();
+        let mut args_to_be_sent: Vec<String> = vec![];
+        let kwargs: HashMap<String, Value> = HashMap::new();
+        let lifted = true;
+        let selectors: Vec<Vec<Value>>;
+        if let Some(v) = object {
+            selectors = Self::get_object(v)?;
+        } else {
+            selectors = vec![];
+        }
+        match function {
+            Some(s) => {
+                if let "help" = s.as_str() {
+                    let navigate = CommandParser::from_params(
+                        Some(vec![]),
+                        Some("commands".to_string()),
+                        Some(vec![]),
+                        false,
+                    );
+                } else {
+                    command = s;
                 }
-                None => {
-                    let command: String;
-                    let mut args_to_be_sent = vec![];
-                    let kwargs = HashMap::new();
-                    let lifted = true;
-                    let selectors = vec![];
-                    match function {
-                        Some(s) => {
-                            if let "help" = s.as_str() {
-                                todo!()
-                            } else {
-                                command = s;
-                            }
-                        }
-                        None => match info {
-                            true => todo!(),
-                            false => {
-                                command = function.unwrap();
-                            }
-                        },
-                    }
-                    if let Some(v) = args {
-                        args_to_be_sent = v;
-                    };
-                    Ok(Self {
-                        selectors,
-                        command,
-                        args: args_to_be_sent,
-                        kwargs,
-                        lifted,
-                    })
+            }
+            None => match info {
+                true => todo!(),
+                false => {
+                    command = function.unwrap();
                 }
             },
         }
+        if let Some(v) = args {
+            args_to_be_sent = v;
+        };
+        Ok(Self {
+            selectors,
+            command,
+            args: args_to_be_sent,
+            kwargs,
+            lifted,
+        })
     }
     pub fn get_object(mut object: Vec<String>) -> anyhow::Result<Vec<Vec<Value>>> {
-        if *object.first().unwrap() == "root" {
+        if object.first() == Some(&"root".to_string()) {
             object.remove(0);
         };
         let mut selectors: Vec<Vec<Value>> = Vec::new();
@@ -156,12 +139,11 @@ impl CommandParser {
                                 }
                             }
                             NumberOrString::String(arg0) => {
-                                // let s = s.to_string();
                                 let obj_string = OBJECTS.iter().find(|&o| *o == arg0);
-                                let hashmap = OBJ_HASHMAP.lock().unwrap();
+                                // let hashmap = OBJ_HASHMAP.lock().unwrap();
                                 let mut obj_vec: Vec<Value> = vec![];
                                 match obj_string {
-                                    Some(i) => {
+                                    Some(_i) => {
                                         // println!("Found arg0: {} in OBJECTS", i);
                                         match arg1 {
                                             NumberOrString::Uint(arg1) => {
@@ -209,14 +191,14 @@ impl CommandParser {
                                                             }
                                                         };
                                                     }
-                                                    Err(err) => {
+                                                    Err(_err) => {
                                                         // println!(
                                                         //     "Error: {}\n  arg0={}\n  arg1={}",
                                                         //     err, arg0, arg1
                                                         // );
                                                         obj_type = ObjectType::with_none(&arg0);
                                                         match obj_type {
-                                                            Ok(ref o) => {
+                                                            Ok(ref _o) => {
                                                                 // println!(
                                                                 //     "Using:\n  arg0={:?}, arg1=None",
                                                                 //     obj_type
@@ -306,14 +288,14 @@ impl CommandParser {
                                                         ),
                                                         }
                                                     }
-                                                    Err(err) => {
+                                                    Err(_err) => {
                                                         // println!(
                                                         //     "Error: {}\n  arg0={}\n  arg1={}",
                                                         //     err, arg0, arg1
                                                         // );
                                                         obj_type = ObjectType::with_none(&arg0);
                                                         match obj_type {
-                                                            Ok(ref o) => {
+                                                            Ok(ref _o) => {
                                                                 // println!(
                                                                 //     "Using:\n  arg0={:?}, arg1=None",
                                                                 //     obj_type
@@ -348,10 +330,10 @@ impl CommandParser {
                             }
                         }
                     }
-                    Left(left) => {
+                    Left(_left) => {
                         // println!("left: {left:?}")
                     }
-                    Right(right) => {
+                    Right(_right) => {
                         // println!("right: {right:?}")
                     }
                 };

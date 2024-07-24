@@ -1,14 +1,26 @@
-use std::{collections::HashMap, sync::Mutex};
+// use std::{collections::HashMap, sync::Mutex};
+// use once_cell::sync::Lazy;
 
-use super::parser::NumberOrString;
 use anyhow::Error;
-use itertools::Itertools;
-use once_cell::sync::Lazy;
 
 pub(crate) static OBJECTS: &[&str] = &[
     "core", "screen", "bar", "widget", "group", "layout", "window", "root",
 ];
 
+// pub(crate) static OBJ_HASHMAP: Lazy<Mutex<HashMap<&str, ObjectType>>> = Lazy::new(|| {
+//     let mut hashmap = HashMap::new();
+//     hashmap.insert("root", ObjectType::Root);
+//     hashmap.insert("core", ObjectType::Core);
+//     hashmap.insert("screen", ObjectType::Screen(None));
+//     hashmap.insert("group", ObjectType::Group(None));
+//     hashmap.insert("layout", ObjectType::Layout(None));
+//     hashmap.insert("window", ObjectType::Window(None));
+//     hashmap.insert("bar", ObjectType::Bar(None));
+//     hashmap.insert("widget", ObjectType::Widget(None));
+//     hashmap.into()
+// });
+
+#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) enum Selector {
     String(String),
@@ -76,21 +88,9 @@ impl ObjectType {
     }
 }
 
-pub(crate) static OBJ_HASHMAP: Lazy<Mutex<HashMap<&str, ObjectType>>> = Lazy::new(|| {
-    let mut hashmap = HashMap::new();
-    hashmap.insert("root", ObjectType::Root);
-    hashmap.insert("core", ObjectType::Core);
-    hashmap.insert("screen", ObjectType::Screen(None));
-    hashmap.insert("group", ObjectType::Group(None));
-    hashmap.insert("layout", ObjectType::Layout(None));
-    hashmap.insert("window", ObjectType::Window(None));
-    hashmap.insert("bar", ObjectType::Bar(None));
-    hashmap.insert("widget", ObjectType::Widget(None));
-    hashmap.into()
-});
-
 type SelectorType = (ObjectType, Selector);
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) struct CommandGraphNode {
     selector: Option<Selector>,
@@ -117,6 +117,8 @@ impl Default for CommandGraphNode {
         }
     }
 }
+
+#[allow(dead_code)]
 impl CommandGraphNode {
     pub fn new(selector: Selector, parent: Option<Box<Self>>, typ: ObjectType) -> Self {
         fn new_with_children(
