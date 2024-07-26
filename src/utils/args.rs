@@ -8,7 +8,7 @@ pub struct Args {
     pub command: Commands,
 }
 #[derive(Subcommand, Debug, Clone)]
-pub(crate) enum Commands {
+pub enum Commands {
     /// Access the command interface from a shell.
     #[command(name = "cmd-obj")]
     CmdObj {

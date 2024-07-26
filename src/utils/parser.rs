@@ -1,5 +1,8 @@
 // use crate::utils::graph::OBJ_HASHMAP;
-use crate::utils::graph::{ObjectType, OBJECTS};
+use crate::utils::{
+    graph::{ObjectType, OBJECTS},
+    ipc::Client,
+};
 use anyhow::bail;
 use clap::command;
 use itertools::{EitherOrBoth::*, Itertools};
@@ -7,7 +10,7 @@ use serde::Deserialize;
 use serde_json::value::Number;
 use serde_json::Value;
 use serde_tuple::Serialize_tuple;
-use std::{collections::HashMap, str::FromStr};
+use std::{collections::HashMap, process::exit, str::FromStr};
 use strum::Display;
 
 use super::args::{Args, Commands};
@@ -76,33 +79,61 @@ impl CommandParser {
         let kwargs: HashMap<String, Value> = HashMap::new();
         let lifted = true;
         let selectors: Vec<Vec<Value>>;
-        if let Some(v) = object {
-            selectors = Self::get_object(v)?;
+        if let Some(ref v) = object {
+            selectors = Self::get_object(v.clone())?;
         } else {
             selectors = vec![];
         }
         match function {
-            Some(s) => {
-                if let "help" = s.as_str() {
-                    let navigate = CommandParser::from_params(
-                        Some(vec![]),
-                        Some("commands".to_string()),
-                        Some(vec![]),
-                        false,
-                    );
+            Some(ref s) => {
+                if "help" == s.as_str() {
+                    let commands = CommandParser {
+                        selectors: selectors.clone(),
+                        command: "commands".to_string(),
+                        args: vec![],
+                        kwargs: kwargs.clone(),
+                        lifted,
+                    };
+                    let data = serde_json::to_string(&commands).unwrap();
+                    let response = Client::send(data);
+                    let result = Client::match_response(response);
+                    match result {
+                        Ok(result) => match result {
+                            Value::Array(arr) => {
+                                if let Some(v) = object {
+                                    let obj_string = v.iter().join(" ").to_string();
+                                    let prefix = "-o ".to_owned() + &obj_string + " -f ";
+                                    let printed_commands =
+                                        Self::print_commands(selectors.clone(), prefix, arr);
+                                    match printed_commands {
+                                        Ok(_) => {
+                                            exit(0);
+                                        }
+                                        Err(err) => bail!("{err}"),
+                                    }
+                                }
+                            }
+                            Value::Null
+                            | Value::Bool(_)
+                            | Value::Number(_)
+                            | Value::String(_)
+                            | Value::Object(_) => bail!("{commands:?} result should be an array"),
+                        },
+                        Err(err) => bail!("{err}"),
+                    }
                 } else {
-                    command = s;
-                }
+                    command.clone_from(s);
+                };
             }
             None => match info {
-                true => todo!(),
+                true => bail!("function is never None"),
                 false => {
                     command = function.unwrap();
                 }
             },
         }
-        if let Some(v) = args {
-            args_to_be_sent = v;
+        if let Some(args) = args {
+            args_to_be_sent = args;
         };
         Ok(Self {
             selectors,
@@ -111,6 +142,69 @@ impl CommandParser {
             kwargs,
             lifted,
         })
+    }
+    fn print_commands(
+        selectors: Vec<Vec<Value>>,
+        prefix: String,
+        arr: Vec<Value>,
+    ) -> anyhow::Result<()> {
+        let commands = arr
+            .iter()
+            .map(|s| s.as_str().unwrap().to_owned())
+            .collect_vec();
+        let mut output: Vec<[String; 2]> = vec![];
+        for cmd in commands {
+            let doc_args = Self::get_formatted_info(selectors.clone(), &cmd, true, true);
+            match doc_args {
+                Ok(doc_args) => {
+                    let pcmd = prefix.clone() + cmd.as_str();
+                    output.push([pcmd, doc_args]);
+                }
+                Err(err) => bail!("{err}"),
+            }
+        }
+        let max_cmd = output
+            .iter()
+            .map(|[pcmd, doc_args]| pcmd.len())
+            .max()
+            .unwrap();
+        for line in output {
+            println!("{:<width$}\t{}", line[0], line[1], width = max_cmd);
+        }
+        Ok(())
+    }
+    fn get_formatted_info(
+        selectors: Vec<Vec<Value>>,
+        cmd: &str,
+        args: bool,
+        short: bool,
+    ) -> anyhow::Result<String> {
+        let commands = CommandParser {
+            selectors: selectors.clone(),
+            command: "doc".to_string(),
+            args: vec![cmd.to_owned()],
+            kwargs: HashMap::new(),
+            lifted: true,
+        };
+        let data = serde_json::to_string(&commands).unwrap();
+        let response = Client::send(data);
+        let result = Client::match_response(response);
+        match result {
+            Ok(result) => {
+                let doc = result.as_str().unwrap().to_owned();
+                let doc = doc.split('\n').collect_vec();
+                let tdoc = doc[0].to_owned();
+                let mut doc_args = &tdoc[tdoc.find('(').unwrap()..tdoc.find(')').unwrap() + 1];
+                let short_desc: &str = if doc.len() > 1 { doc[1] } else { "" };
+                if !args {
+                    doc_args = "";
+                } else if short {
+                    doc_args = if doc_args == "()" { " " } else { "*" }
+                }
+                Ok(doc_args.to_owned() + " " + short_desc)
+            }
+            Err(err) => bail!("{err}"),
+        }
     }
     pub fn get_object(mut object: Vec<String>) -> anyhow::Result<Vec<Vec<Value>>> {
         if object.first() == Some(&"root".to_string()) {
@@ -331,10 +425,12 @@ impl CommandParser {
                         }
                     }
                     Left(_left) => {
-                        // println!("left: {left:?}")
+                        if _left.as_str() == "bar" {
+                            bail!("bar needs to have position: top|right|bottom|left")
+                        }
                     }
                     Right(_right) => {
-                        // println!("right: {right:?}")
+                        println!("right: {_right:?}")
                     }
                 };
                 // println!();

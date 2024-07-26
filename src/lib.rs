@@ -1,5 +1,5 @@
 #![allow(dead_code, unused_variables, unreachable_code, unused_imports)]
-pub(crate) mod utils;
+pub mod utils;
 #[cfg(test)]
 mod tests {
     use clap::Parser;
