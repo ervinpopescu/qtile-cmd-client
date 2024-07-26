@@ -14,7 +14,7 @@ cpu     99%
 No benchmarking needed:
 
 ```bash
-time (qtile-cmd cmd-obj -f windows &>/dev/null)
+time (cargo run --release -q -- cmd-obj -f windows &>/dev/null)
 
 real    0.06s
 user    0.00s

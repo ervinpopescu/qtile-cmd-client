@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 
-/// Command line arguments
+/// Qtile command client
 #[derive(Parser, Debug, Clone)]
 #[command(version, about, long_about = None)]
 pub struct Args {
