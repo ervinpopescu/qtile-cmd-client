@@ -1,5 +1,12 @@
 # Qtile Command Client written in `Rust`
 
+<!--toc:start-->
+
+- [Qtile Command Client written in `Rust`](#qtile-command-client-written-in-rust)
+  - [IMPORTANT](#important)
+  - [TODO](#todo)
+  <!--toc:end-->
+
 This pet project was born out of an issue I could not find the root cause for:
 
 ```bash
@@ -24,4 +31,8 @@ cpu     2%
 
 ## IMPORTANT
 
-THIS PROJECT IS STILL IN THE EARLY STAGES (`rg todo` if you want to see why).
+THIS PROJECT IS STILL IN THE EARLY STAGES!
+
+## TODO
+
+- Add tests

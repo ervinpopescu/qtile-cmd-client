@@ -4,7 +4,6 @@ use crate::utils::{
     ipc::Client,
 };
 use anyhow::bail;
-use clap::command;
 use itertools::{EitherOrBoth::*, Itertools};
 use serde::Deserialize;
 use serde_json::value::Number;
@@ -163,11 +162,7 @@ impl CommandParser {
                 Err(err) => bail!("{err}"),
             }
         }
-        let max_cmd = output
-            .iter()
-            .map(|[pcmd, doc_args]| pcmd.len())
-            .max()
-            .unwrap();
+        let max_cmd = output.iter().map(|[pcmd, _]| pcmd.len()).max().unwrap();
         for line in output {
             println!("{:<width$}\t{}", line[0], line[1], width = max_cmd);
         }

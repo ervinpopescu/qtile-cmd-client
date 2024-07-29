@@ -17,7 +17,10 @@ impl ShellClient {
     }
     // pub fn
 }
+
+#[allow(dead_code)]
 pub struct InteractiveCommandClient {}
+#[allow(dead_code)]
 impl InteractiveCommandClient {
     pub fn call(
         object: Option<Vec<String>>,

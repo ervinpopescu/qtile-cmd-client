@@ -1,4 +1,4 @@
-#![allow(dead_code, unused_variables, unreachable_code, unused_imports)]
+#![deny(dead_code, unused_variables, unreachable_code, unused_imports)]
 
 use clap::Parser;
 pub(crate) mod utils;
