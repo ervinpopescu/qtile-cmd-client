@@ -419,9 +419,14 @@ impl CommandParser {
                             }
                         }
                     }
-                    Left(_left) => {
-                        if _left.as_str() == "bar" {
+                    Left(left) => {
+                        if left.as_str() == "bar" {
                             bail!("bar needs to have position: top|right|bottom|left")
+                        }
+                        if OBJECTS.contains(&left.as_str()) {
+                            let obj_vec: Vec<Value> =
+                                vec![Value::String(left.clone()), Value::Null];
+                            selectors.push(obj_vec);
                         }
                     }
                     Right(_right) => {
