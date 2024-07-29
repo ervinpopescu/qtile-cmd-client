@@ -22,5 +22,5 @@ name = "qticc"
 path = "src/main.rs"
 
 [lib]
-name = "qtile_cmd_client_lib"
+name = "qtile_client_lib"
 path = "src/lib.rs"
