@@ -33,15 +33,27 @@ impl Client {
                                 let n = n.as_u64().unwrap();
                                 match n {
                                     0 => Ok(result.clone()),
-                                    1 => bail!("ipc.Client: response_code = 0: {result}"),
-                                    _ => bail!("ipc.Client: qtile should return 0/1"),
+                                    n => match result {
+                                        Value::String(s) => {
+                                            bail!("ipc.Client: response_code = {n}:\n{s:#}")
+                                        }
+                                        Value::Null
+                                        | Value::Bool(_)
+                                        | Value::Number(_)
+                                        | Value::Array(_)
+                                        | Value::Object(_) => {
+                                            bail!("ipc.Client: bad response by qtile!?")
+                                        }
+                                    },
                                 }
                             }
                             Value::Null
                             | Value::Bool(_)
                             | Value::String(_)
                             | Value::Array(_)
-                            | Value::Object(_) => bail!("ipc.Client: bad response by qtile!?"),
+                            | Value::Object(_) => {
+                                bail!("ipc.Client: bad response by qtile!?")
+                            }
                         }
                     }
                     Value::Null
