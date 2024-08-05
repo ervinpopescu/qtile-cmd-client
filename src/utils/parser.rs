@@ -31,16 +31,21 @@ impl FromStr for NumberOrString {
     }
 }
 
-// [
-//   [
-//      ["screen", null],
-//      ["bar", "bottom"]
-//   ],
-//   "eval",
-//   ["[w.info() for w in self.widgets]"],
-//   {},
-//   true
-// ]
+/// Parse CLI args or parameters into a struct in order to send it over the qtile socket
+///
+/// Examples:
+/// ```json
+/// [
+///   [
+///      ["screen", null],
+///      ["bar", "bottom"]
+///   ],
+///   "eval",
+///   ["[w.info() for w in self.widgets]"],
+///   {},
+///   true
+/// ]
+/// ```
 #[derive(Serialize_tuple, Deserialize, Debug)]
 pub struct CommandParser {
     selectors: Vec<Vec<Value>>,
@@ -51,6 +56,7 @@ pub struct CommandParser {
 }
 
 impl CommandParser {
+    /// Destructure command from CLI into parameters and create a new Self using [`Self::from_params`]
     pub fn from_args(cli_args: Args) -> anyhow::Result<Self> {
         // let graph_node: CommandGraphNode = CommandGraphNode::new(
         //     Selector::String("screen".to_string()),
@@ -67,6 +73,7 @@ impl CommandParser {
             } => Self::from_params(object, function, args, info),
         }
     }
+    ///  Create a new Self from parameters
     pub fn from_params(
         object: Option<Vec<String>>,
         function: Option<String>,
@@ -204,7 +211,7 @@ impl CommandParser {
             Err(err) => bail!("{err}"),
         }
     }
-    pub fn get_object(mut object: Vec<String>) -> anyhow::Result<Vec<Vec<Value>>> {
+    fn get_object(mut object: Vec<String>) -> anyhow::Result<Vec<Vec<Value>>> {
         if object.first() == Some(&"root".to_string()) {
             object.remove(0);
         };

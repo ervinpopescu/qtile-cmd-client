@@ -1,3 +1,6 @@
+//! I've written this qtile client in order to learn some more Rust (get used to [`serde`], [`clap`] and
+//! other crates) and to get faster responses than when I used `qtile cmd-obj` and other such
+//! commands (which were most likely slower because of the underlying Python bonanza).
 #![warn(
     dead_code,
     unused_variables,

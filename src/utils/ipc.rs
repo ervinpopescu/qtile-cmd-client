@@ -7,8 +7,13 @@ use std::{
 use anyhow::{bail, Context};
 use serde_json::Value;
 
+/// IPC client which is used for sending the "requests" to `qtile`'s socket
 pub struct Client {}
 impl Client {
+    /// Send the message to the server.
+    ///
+    /// Connect to the server, then pack and send the message to the server,
+    /// then wait for and return the response from the server.
     pub fn send(data: String) -> anyhow::Result<String> {
         let xdg_cache_home = std::env::var("XDG_CACHE_HOME").unwrap_or("~/.cache".to_string());
         let cache_dir = Path::new(&xdg_cache_home);
@@ -21,6 +26,8 @@ impl Client {
         stream.read_to_string(&mut response)?;
         Ok(response)
     }
+    /// Match a response from a [`String`] to a [`serde_json::Value`] based on how qtile should or
+    /// shouldn't respond
     pub fn match_response(response: anyhow::Result<String>) -> anyhow::Result<Value> {
         match response {
             Ok(response) => match serde_json::from_str(&response) {
