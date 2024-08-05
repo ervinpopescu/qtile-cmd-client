@@ -99,17 +99,20 @@ impl CommandParser {
                     match result {
                         Ok(result) => match result {
                             Value::Array(arr) => {
+                                let obj_string;
                                 if let Some(v) = object {
-                                    let obj_string = v.iter().join(" ").to_string();
-                                    let prefix = "-o ".to_owned() + &obj_string + " -f ";
-                                    let printed_commands =
-                                        Self::print_commands(selectors.clone(), prefix, arr);
-                                    match printed_commands {
-                                        Ok(_) => {
-                                            exit(0);
-                                        }
-                                        Err(err) => bail!("{err}"),
+                                    obj_string = v.iter().join(" ").to_string();
+                                } else {
+                                    obj_string = "".to_owned();
+                                }
+                                let prefix = "-o ".to_owned() + &obj_string + " -f ";
+                                let printed_commands =
+                                    Self::print_commands(selectors.clone(), prefix, arr);
+                                match printed_commands {
+                                    Ok(()) => {
+                                        exit(0);
                                     }
+                                    Err(err) => bail!("no commands returned: {err}"),
                                 }
                             }
                             Value::Null
@@ -118,7 +121,7 @@ impl CommandParser {
                             | Value::String(_)
                             | Value::Object(_) => bail!("{commands:?} result should be an array"),
                         },
-                        Err(err) => bail!("{err}"),
+                        Err(err) => bail!("qtile error: {err}"),
                     }
                 } else {
                     command.clone_from(s);
