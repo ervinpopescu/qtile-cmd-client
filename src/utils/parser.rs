@@ -205,6 +205,9 @@ impl CommandParser {
         if object.first() == Some(&"root".to_string()) {
             object.remove(0);
         };
+        if object.len() == 1 && !OBJECTS.iter().any(|o| *o == object[0]) {
+            bail!("No such object \"{}\"", object[0]);
+        }
         let mut selectors: Vec<Vec<Value>> = Vec::new();
         let mut parsed_next = false;
         if !object.is_empty() {
