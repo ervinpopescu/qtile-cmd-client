@@ -110,7 +110,7 @@ impl CommandParser {
                                 if let Some(v) = object {
                                     obj_string = v.iter().join(" ").to_string();
                                 } else {
-                                    obj_string = "".to_owned();
+                                    obj_string = "root".to_owned();
                                 }
                                 let prefix = "-o ".to_owned() + &obj_string + " -f ";
                                 let printed_commands =
