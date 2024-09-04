@@ -17,7 +17,10 @@ impl Client {
     pub fn send(data: String) -> anyhow::Result<String> {
         let xdg_cache_home = std::env::var("XDG_CACHE_HOME").unwrap_or("~/.cache".to_string());
         let cache_dir = Path::new(&xdg_cache_home);
-        let mut stream = UnixStream::connect(cache_dir.join("qtile/qtilesocket.:0"))?;
+        let mut stream = UnixStream::connect(cache_dir.join(format!(
+            "qtile/qtilesocket.{}",
+            std::env::var("DISPLAY").unwrap_or(":0".to_string())
+        )))?;
         stream.write_all(data.as_bytes())?;
         stream
             .shutdown(std::net::Shutdown::Write)
