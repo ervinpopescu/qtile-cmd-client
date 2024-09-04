@@ -93,53 +93,20 @@ impl CommandParser {
         match function {
             Some(ref s) => {
                 if "help" == s.as_str() {
-                    let commands = CommandParser {
-                        selectors: selectors.clone(),
-                        command: "commands".to_string(),
-                        args: vec![],
-                        kwargs: kwargs.clone(),
-                        lifted,
-                    };
-                    let data = serde_json::to_string(&commands).unwrap();
-                    let response = Client::send(data);
-                    let result = Client::match_response(response);
-                    match result {
-                        Ok(result) => match result {
-                            Value::Array(arr) => {
-                                let obj_string;
-                                if let Some(v) = object {
-                                    obj_string = v.iter().join(" ").to_string();
-                                } else {
-                                    obj_string = "root".to_owned();
-                                }
-                                let prefix = "-o ".to_owned() + &obj_string + " -f ";
-                                let printed_commands =
-                                    Self::print_commands(selectors.clone(), prefix, arr);
-                                match printed_commands {
-                                    Ok(()) => {
-                                        exit(0);
-                                    }
-                                    Err(err) => bail!("no commands returned: {err}"),
-                                }
-                            }
-                            Value::Null
-                            | Value::Bool(_)
-                            | Value::Number(_)
-                            | Value::String(_)
-                            | Value::Object(_) => bail!("{commands:?} result should be an array"),
-                        },
-                        Err(err) => bail!("qtile error: {err}"),
-                    }
+                    Self::print_help(&selectors, object)?
+                } else if info {
+                    command = function.as_ref().unwrap().to_owned();
+                    println!(
+                        "{} {}",
+                        function.unwrap(),
+                        Self::get_formatted_info(selectors.clone(), &command, true, false).unwrap()
+                    );
+                    exit(0)
                 } else {
-                    command.clone_from(s);
-                };
-            }
-            None => match info {
-                true => bail!("function is never None"),
-                false => {
                     command = function.unwrap();
                 }
-            },
+            }
+            None => Self::print_help(&selectors, object)?,
         }
         if let Some(args) = args {
             args_to_be_sent = args;
@@ -152,6 +119,50 @@ impl CommandParser {
             lifted,
         })
     }
+
+    /// Prints help for cmd-obj
+    pub fn print_help(
+        selectors: &Vec<Vec<Value>>,
+        object: Option<Vec<String>>,
+    ) -> anyhow::Result<()> {
+        let commands = CommandParser {
+            selectors: selectors.clone(),
+            command: "commands".to_string(),
+            args: vec![],
+            kwargs: HashMap::new(),
+            lifted: true,
+        };
+        let data = serde_json::to_string(&commands).unwrap();
+        let response = Client::send(data);
+        let result = Client::match_response(response);
+        match result {
+            Ok(result) => match result {
+                Value::Array(arr) => {
+                    let obj_string;
+                    if let Some(v) = object {
+                        obj_string = v.iter().join(" ").to_string();
+                    } else {
+                        obj_string = "root".to_owned();
+                    }
+                    let prefix = "-o ".to_owned() + &obj_string + " -f ";
+                    let printed_commands = Self::print_commands(selectors.clone(), prefix, arr);
+                    match printed_commands {
+                        Ok(()) => {
+                            exit(0);
+                        }
+                        Err(err) => bail!("no commands returned: {err}"),
+                    }
+                }
+                Value::Null
+                | Value::Bool(_)
+                | Value::Number(_)
+                | Value::String(_)
+                | Value::Object(_) => bail!("{commands:?} result should be an array"),
+            },
+            Err(err) => bail!("qtile error: {err}"),
+        }
+    }
+
     fn print_commands(
         selectors: Vec<Vec<Value>>,
         prefix: String,
