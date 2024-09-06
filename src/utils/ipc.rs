@@ -1,11 +1,52 @@
 use std::{
     io::{Read, Write},
     os::unix::net::UnixStream,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use anyhow::{bail, Context};
 use serde_json::Value;
+/// Finds the appropriate socket file for the given display.
+///
+///If unspecified, the socket file is determined as follows:
+///
+///    - If WAYLAND_DISPLAY is set, use it.
+///    - else if DISPLAY is set, use that.
+///    - else check for the existence of a socket file for WAYLAND_DISPLAY=wayland-0
+///      and if it exists, use it.
+///    - else check for the existence of a socket file for DISPLAY=:0
+///      and if it exists, use it.
+
+fn find_sockfile(display: Option<String>) -> PathBuf {
+    let xdg_cache_home = std::env::var("XDG_CACHE_HOME").unwrap_or("~/.cache".to_string());
+    let cache_dir = Path::new(&xdg_cache_home);
+    match display {
+        Some(s) => cache_dir.join("qtile").join(format!("qtilesocket.{}", s)),
+        None => match std::env::var("WAYLAND_DISPLAY") {
+            Ok(s) => cache_dir.join("qtile").join(format!("qtilesocket.{}", s)),
+            Err(_) => match std::env::var("DISPLAY") {
+                Ok(s) => cache_dir.join("qtile").join(format!("qtilesocket.{}", s)),
+                Err(_) => {
+                    let mut sockfile = cache_dir
+                        .join("qtile")
+                        .join(format!("qtilesocket.{}", "wayland-0"));
+                    if std::path::Path::exists(&sockfile) {
+                        return sockfile;
+                    }
+                    sockfile = cache_dir
+                        .join("qtile")
+                        .join(format!("qtilesocket.{}", ":0"));
+
+                    if std::path::Path::exists(&sockfile) {
+                        return sockfile;
+                    }
+
+                    sockfile
+                }
+            },
+        },
+    }
+}
 
 /// IPC client which is used for sending the "requests" to `qtile`'s socket
 pub struct Client {}
@@ -15,12 +56,7 @@ impl Client {
     /// Connect to the server, then pack and send the message to the server,
     /// then wait for and return the response from the server.
     pub fn send(data: String) -> anyhow::Result<String> {
-        let xdg_cache_home = std::env::var("XDG_CACHE_HOME").unwrap_or("~/.cache".to_string());
-        let cache_dir = Path::new(&xdg_cache_home);
-        let mut stream = UnixStream::connect(cache_dir.join(format!(
-            "qtile/qtilesocket.{}",
-            std::env::var("DISPLAY").unwrap_or(":0".to_string())
-        )))?;
+        let mut stream = UnixStream::connect(find_sockfile(None))?;
         stream.write_all(data.as_bytes())?;
         stream
             .shutdown(std::net::Shutdown::Write)
