@@ -1,21 +1,27 @@
+use anyhow::bail;
+
 use crate::utils::{
     args::Args,
     client::{InteractiveCommandClient, ShellClient},
 };
 
 #[test]
-fn interactive_command_client() {
-    assert!(InteractiveCommandClient::call(
+fn interactive_command_client_x11() -> anyhow::Result<()> {
+    let ret = InteractiveCommandClient::call(
         Some(vec!["root".to_string()]),
         Some("qtile_info".to_string()),
         Some(vec![]),
         false,
-    )
-    .is_ok());
+    );
+    match ret {
+        Ok(s) => println!("{:#}", s),
+        Err(e) => bail!(e),
+    }
+    Ok(())
 }
 
 #[test]
-fn shell_client() {
+fn shell_client_x11() -> anyhow::Result<()> {
     let args = Args {
         command: crate::utils::args::Commands::CmdObj {
             object: None,
@@ -24,5 +30,5 @@ fn shell_client() {
             info: false,
         },
     };
-    assert!(ShellClient::call(args).is_ok());
+    ShellClient::call(args)
 }

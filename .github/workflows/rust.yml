@@ -5,18 +5,33 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
+  build-and-test:
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v4
+    - name: Rust Cargo cache
+      uses: raviqqe/cargo-cache@v1
     - name: Build
-      run: cargo build --verbose
-    # - name: Run tests
-    #   run: cargo test --verbose
+      run: cargo build -q
+    - name: Install qtile
+      run: pip install qtile
+    - name: Run tests on X11
+      run: |
+        export DISPLAY=:99
+        sudo Xvfb -ac :99 -screen 0 1280x1024x24 > /dev/null 2>&1 &
+        qtile start &
+        if [[ $? -eq 0 ]]; then
+          echo "qtile started successfully"
+        fi
+        while ! (qtile cmd-obj -f qtile_info &>/dev/null); do echo socket not responsive yet; done
+        qtile cmd-obj -f qtile_info
+        ls ~/.local/share/qtile/qtile.log && tail ~/.local/share/qtile/qtile.log
+        ls ~/.cache/qtile/
+        cargo test --lib -q -- --nocapture
+        pkill -9 qtile

@@ -6,9 +6,11 @@ use std::{
 
 use anyhow::{bail, Context};
 use serde_json::Value;
+use shellexpand::tilde;
+
 /// Finds the appropriate socket file for the given display.
 ///
-///If unspecified, the socket file is determined as follows:
+/// If unspecified, the socket file is determined as follows:
 ///
 ///    - If WAYLAND_DISPLAY is set, use it.
 ///    - else if DISPLAY is set, use that.
@@ -16,31 +18,46 @@ use serde_json::Value;
 ///      and if it exists, use it.
 ///    - else check for the existence of a socket file for DISPLAY=:0
 ///      and if it exists, use it.
-
 fn find_sockfile(display: Option<String>) -> PathBuf {
-    let xdg_cache_home = std::env::var("XDG_CACHE_HOME").unwrap_or("~/.cache".to_string());
+    let xdg_cache_home = std::env::var("XDG_CACHE_HOME").unwrap_or(tilde("~/.cache").to_string());
     let cache_dir = Path::new(&xdg_cache_home);
+    let sockfile: PathBuf;
     match display {
-        Some(s) => cache_dir.join("qtile").join(format!("qtilesocket.{}", s)),
+        Some(s) => {
+            sockfile = cache_dir.join("qtile").join(format!("qtilesocket.{}", s));
+            // eprintln!("sockfile: {sockfile:#?}");
+            sockfile
+        }
         None => match std::env::var("WAYLAND_DISPLAY") {
-            Ok(s) => cache_dir.join("qtile").join(format!("qtilesocket.{}", s)),
+            Ok(s) => {
+                sockfile = cache_dir.join("qtile").join(format!("qtilesocket.{}", s));
+                // eprintln!("sockfile: {sockfile:#?}");
+                sockfile
+            }
             Err(_) => match std::env::var("DISPLAY") {
-                Ok(s) => cache_dir.join("qtile").join(format!("qtilesocket.{}", s)),
+                Ok(s) => {
+                    sockfile = cache_dir.join("qtile").join(format!("qtilesocket.{}", s));
+                    // eprintln!("sockfile: {sockfile:#?}");
+                    sockfile
+                }
                 Err(_) => {
                     let mut sockfile = cache_dir
                         .join("qtile")
                         .join(format!("qtilesocket.{}", "wayland-0"));
                     if std::path::Path::exists(&sockfile) {
+                        // eprintln!("sockfile: {sockfile:#?}");
                         return sockfile;
                     }
+
                     sockfile = cache_dir
                         .join("qtile")
                         .join(format!("qtilesocket.{}", ":0"));
-
                     if std::path::Path::exists(&sockfile) {
+                        // eprintln!("sockfile: {sockfile:#?}");
                         return sockfile;
                     }
 
+                    // eprintln!("sockfile: {sockfile:#?}");
                     sockfile
                 }
             },
@@ -56,7 +73,8 @@ impl Client {
     /// Connect to the server, then pack and send the message to the server,
     /// then wait for and return the response from the server.
     pub fn send(data: String) -> anyhow::Result<String> {
-        let mut stream = UnixStream::connect(find_sockfile(None))?;
+        let mut stream =
+            UnixStream::connect(find_sockfile(None)).expect("could not connect to socket");
         stream.write_all(data.as_bytes())?;
         stream
             .shutdown(std::net::Shutdown::Write)
