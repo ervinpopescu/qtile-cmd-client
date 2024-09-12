@@ -14,6 +14,9 @@ strum = { version = "0.26.3", features = ["derive"] }
 strum_macros = { version = "0.26.4" }
 itertools = "0.13.0"
 simple_logger = "5.0.0"
+ctor = "*"
+sysinfo = "*"
+shellexpand = { version = "3.1.0", features = ["full", "path"] }
 
 [[bin]]
 name = "qticc"
