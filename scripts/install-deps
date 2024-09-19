@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+
+set -e
+apt -y install \
+  drm-info \
+  jq \
+  libcairo2-dev \
+  libd3dadapter9-mesa \
+  libd3dadapter9-mesa-dev \
+  libdrm-dev \
+  libegl-mesa0 \
+  libegl1-mesa-dev \
+  libgbm-dev \
+  libgbm1 \
+  libgdk-pixbuf-2.0-0 \
+  libgl1-mesa-dev \
+  libgl1-mesa-dri \
+  libglapi-mesa \
+  libgles2-mesa-dev \
+  libglx-mesa0 \
+  libjson-c-dev \
+  libosmesa6 \
+  libosmesa6-dev \
+  libpango-1.0-0 \
+  libpangocairo-1.0-0 \
+  libwlroots-dev \
+  libxatracker-dev \
+  libxatracker2 \
+  libxkbcommon-dev \
+  mesa-drm-shim \
+  mesa-opencl-icd \
+  mesa-va-drivers \
+  mesa-vdpau-drivers \
+  mesa-vulkan-drivers \
+  meson \
+  ninja-build \
+  policykit-1 \
+  python3-dev \
+  python3-xcffib \
+  seatd \
+  xvfb \
+  xwayland \
+  &
+su runner -c 'curl https://sh.rustup.rs -sSf | bash -s -- -y' &
+git clone https://github.com/qtile/qtile.git
+cd qtile
+python3 -m venv venv
+source venv/bin/activate
+python -m pip install --upgrade pip
+wait
+pip install 'xkbcommon==1.0.1' 'pywlroots==0.17' 'pywayland==0.4.18' build installer wheel 'cairocffi[xcb]>=1.6.0' 'setuptools-scm>=7.0' 'setuptools_scm>=3.2.0'
+python -m build --no-isolation --wheel
+_site_packages=$(python -c "import site; print(site.getsitepackages()[0])")
+export LC_TYPE=en_US.UTF-8
+export PYTHONPATH="test_dir/$_site_packages:$PYTHONPATH"
+python -m installer --destdir=test_dir dist/*.whl
+./scripts/ffibuild -v
+deactivate
+chown runner:users /home/runner/qtile -R
+usermod -aG video runner
