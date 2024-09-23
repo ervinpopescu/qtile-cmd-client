@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = { version = "*" }
-clap = { version = "4.5.17", features = ["derive"] }
+clap = { version = "4.5.18", features = ["derive"] }
 serde = { version = "*", features = ["derive"] }
 serde_tuple = { version = "*" }
 serde_json = { version = "*" }
