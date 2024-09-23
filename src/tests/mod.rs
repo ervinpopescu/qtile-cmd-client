@@ -1,12 +1,9 @@
 use anyhow::bail;
 
-use crate::utils::{
-    args::Args,
-    client::{InteractiveCommandClient, ShellClient},
-};
+use crate::utils::client::InteractiveCommandClient;
 
 #[test]
-fn interactive_command_client_x11() -> anyhow::Result<()> {
+fn qtile_info() -> anyhow::Result<()> {
     let ret = InteractiveCommandClient::call(
         Some(vec!["root".to_string()]),
         Some("qtile_info".to_string()),
@@ -18,17 +15,4 @@ fn interactive_command_client_x11() -> anyhow::Result<()> {
         Err(e) => bail!(e),
     }
     Ok(())
-}
-
-#[test]
-fn shell_client_x11() -> anyhow::Result<()> {
-    let args = Args {
-        command: crate::utils::args::Commands::CmdObj {
-            object: None,
-            function: Some("qtile_info".to_owned()),
-            args: None,
-            info: false,
-        },
-    };
-    ShellClient::call(args)
 }

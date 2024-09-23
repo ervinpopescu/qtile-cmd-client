@@ -12,8 +12,6 @@ use serde_tuple::Serialize_tuple;
 use std::{collections::HashMap, process::exit, str::FromStr};
 use strum::Display;
 
-use super::args::{Args, Commands};
-
 #[derive(PartialEq, Debug, Display)]
 pub(crate) enum NumberOrString {
     Uint(u32),
@@ -56,23 +54,6 @@ pub struct CommandParser {
 }
 
 impl CommandParser {
-    /// Destructure command from CLI into parameters and create a new Self using [`Self::from_params`]
-    pub fn from_args(cli_args: Args) -> anyhow::Result<Self> {
-        // let graph_node: CommandGraphNode = CommandGraphNode::new(
-        //     Selector::String("screen".to_string()),
-        //     None,
-        //     NodeType::Object(ObjectType::Screen("screen".to_string(), None)),
-        // );
-        // println!("{:#?}", graph_node);
-        match cli_args.command {
-            Commands::CmdObj {
-                object,
-                function,
-                args,
-                info,
-            } => Self::from_params(object, function, args, info),
-        }
-    }
     ///  Create a new Self from parameters
     pub fn from_params(
         object: Option<Vec<String>>,
@@ -121,12 +102,9 @@ impl CommandParser {
     }
 
     /// Prints help for cmd-obj
-    pub fn print_help(
-        selectors: &Vec<Vec<Value>>,
-        object: Option<Vec<String>>,
-    ) -> anyhow::Result<()> {
+    pub fn print_help(selectors: &[Vec<Value>], object: Option<Vec<String>>) -> anyhow::Result<()> {
         let commands = CommandParser {
-            selectors: selectors.clone(),
+            selectors: selectors.to_owned(),
             command: "commands".to_string(),
             args: vec![],
             kwargs: HashMap::new(),
@@ -145,7 +123,7 @@ impl CommandParser {
                         obj_string = "root".to_owned();
                     }
                     let prefix = "-o ".to_owned() + &obj_string + " -f ";
-                    let printed_commands = Self::print_commands(selectors.clone(), prefix, arr);
+                    let printed_commands = Self::print_commands(selectors.to_owned(), prefix, arr);
                     match printed_commands {
                         Ok(()) => {
                             exit(0);
