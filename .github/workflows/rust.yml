@@ -16,9 +16,9 @@ env:
 jobs:
   build-and-test:
     # runs-on: ubuntu-24.04
-    runs-on: self-hosted
+    runs-on: arc-runner-set
     strategy:
-      max-parallel: 1
+      max-parallel: 2
       matrix:
         python-version: ["3.11", "3.12"]
 
@@ -29,6 +29,8 @@ jobs:
         sudo seatd -g video &
     # - name: Rust Cargo cache
     #   uses: raviqqe/cargo-cache@v1
+    - name: Install deps
+      run: ./scripts/install-deps
     - name: Build
       run: cargo build -q
     - name: Set up Python
