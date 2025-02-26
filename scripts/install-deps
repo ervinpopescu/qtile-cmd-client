@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 
 set -e
-apt -y install \
+sudo apt -y install git
+sudo apt -y install \
   drm-info \
   jq \
   libcairo2-dev \
@@ -42,6 +43,7 @@ apt -y install \
   xwayland \
   &
 su runner -c 'curl https://sh.rustup.rs -sSf | bash -s -- -y' &
+cd /home/runner
 git clone https://github.com/qtile/qtile.git
 cd qtile
 python3 -m venv venv
