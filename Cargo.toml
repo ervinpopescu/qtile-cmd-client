@@ -12,7 +12,7 @@ serde_json = { version = "*" }
 log = { version = "0.4.21" }
 strum = { version = "0.26.3", features = ["derive"] }
 strum_macros = { version = "0.26.4" }
-itertools = "0.13.0"
+itertools = "0.14.0"
 simple_logger = "5.0.0"
 ctor = "*"
 sysinfo = "*"
