@@ -9,7 +9,7 @@ clap = { version = "4.5.31", features = ["derive"] }
 serde = { version = "*", features = ["derive"] }
 serde_tuple = { version = "*" }
 serde_json = { version = "*" }
-log = { version = "0.4.21" }
+log = { version = "0.4.26" }
 strum = { version = "0.26.3", features = ["derive"] }
 strum_macros = { version = "0.26.4" }
 itertools = "0.14.0"
