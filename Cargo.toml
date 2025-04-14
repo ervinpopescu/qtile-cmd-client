@@ -16,7 +16,7 @@ itertools = "0.14.0"
 simple_logger = "5.0.0"
 ctor = "*"
 sysinfo = "*"
-shellexpand = { version = "3.1.0", features = ["full", "path"] }
+shellexpand = { version = "3.1.1", features = ["full", "path"] }
 
 [[bin]]
 name = "qticc"
