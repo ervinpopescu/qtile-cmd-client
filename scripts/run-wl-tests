@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 
-pwd
 cwd=$(pwd)
-sudo drm_info -j 2>&1 | jq &>/dev/null || echo could not get DRI devices
+
 cd ~/qtile
 # source venv/bin/activate
 ls ./test_dir"$(pwd)"/venv/bin/qtile && export PATH="./test_dir$(pwd)/venv/bin:$PATH"
@@ -16,13 +15,13 @@ export WLR_LIBINPUT_NO_DEVICES=1
 export WLR_RENDERER_ALLOW_SOFTWARE=1
 export WLR_RENDERER=pixman
 qtile start -b wayland &
+
 echo "while ! (qtile cmd-obj -f qtile_info &>/dev/null); do echo socket not responsive yet; sleep 1; done" >wait_for_socket.sh
 timeout 15 bash wait_for_socket.sh
-[[ $? -eq 124 ]] && echo "could not connect to socket, qtile is not running" && exit 1
-echo $WAYLAND_DISPLAY
-ls ~/.cache/qtile/
-ls ~/.local/share/qtile/qtile.log && tail ~/.local/share/qtile/qtile.log
+[[ $? -eq 124 ]] && echo "could not connect to socket, qtile is not running" && ls ~/.local/share/qtile/qtile.log && tail ~/.local/share/qtile/qtile.log && exit 1
+
 qtile cmd-obj -f qtile_info
+
 cd $cwd
 cargo test --lib -q -- --nocapture || export FAIL=1
 pkill -9 qtile

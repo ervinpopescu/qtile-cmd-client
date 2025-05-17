@@ -1,30 +1,26 @@
 #!/usr/bin/env bash
 
 cwd=$(pwd)
-# source "$HOME/.cargo/env"
-export DISPLAY=:99
-sudo Xvfb -ac :99 -screen 0 1280x1024x24 &>/dev/null &
 
-cd /home/runner/qtile
+export DISPLAY=:99
+sudo Xvfb -ac $DISPLAY -screen 0 1280x1024x24 &>/dev/null &
+
+cd ~/qtile
 # source venv/bin/activate
 ls ./test_dir"$(pwd)"/venv/bin/qtile && export PATH="./test_dir$(pwd)/venv/bin:$PATH"
 _site_packages=$(python -c "import site; print(site.getsitepackages()[0])")
 export LC_TYPE=en_US.UTF-8
 export PYTHONPATH="test_dir/$_site_packages:$PYTHONPATH"
-mkdir -p ~/.local/share/qtile
-ls ~/.local/share/qtile/qtile.log && tail ~/.local/share/qtile/qtile.log
 qtile start &
 
-echo 'while ! (qtile cmd-obj -f qtile_info &>/dev/null); do echo socket not responsive yet; sleep 1; done' >wait_for_socket.sh
-timeout 5 bash wait_for_socket.sh
+echo "while ! (qtile cmd-obj -f qtile_info &>/dev/null); do echo socket not responsive yet; sleep 1; done" >wait_for_socket.sh
+timeout 15 bash wait_for_socket.sh
 [[ $? -eq 124 ]] && echo "could not connect to socket, qtile is not running" && ls ~/.local/share/qtile/qtile.log && tail ~/.local/share/qtile/qtile.log && exit 1
 
 qtile cmd-obj -f qtile_info
 
-ls ~/.local/share/qtile/qtile.log && tail ~/.local/share/qtile/qtile.log
-ls ~/.cache/qtile/
-
 cd $cwd
-cargo test --lib -q -- --nocapture
+cargo test --lib -q -- --nocapture || export FAIL=1
 pkill -9 qtile
+if [[ $FAIL -eq 1 ]]; then exit 1; fi
 # deactivate

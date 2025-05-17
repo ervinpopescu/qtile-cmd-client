@@ -1,7 +1,7 @@
 name: Rust
-defaults:
-  run:
-    shell: bash -ieo pipefail {0}
+# defaults:
+#   run:
+#     shell: bash -ieo pipefail {0}
 
 on:
   push:
@@ -12,29 +12,46 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  AGENT_TOOLSDIRECTORY: "/opt/hostedtoolcache"
 
 jobs:
   build-and-test:
-    # runs-on: ubuntu-24.04
-    runs-on: self-hosted
+    runs-on: arc-runner-set
     strategy:
-      max-parallel: 1
       matrix:
         python-version: ["3.11", "3.12"]
-
     steps:
     - uses: actions/checkout@v4
     - name: Start seatd
       run: |
+        echo "$PATH" | tr ':' '\n'
+        ls /usr/bin/sudo
+        sudo apt -y install seatd
         sudo seatd -g video &
-    # - name: Rust Cargo cache
-    #   uses: raviqqe/cargo-cache@v1
-    - name: Build
-      run: cargo build -q
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
+    - name: Install deps
+      run: |
+        ./scripts/install-deps
+        ./scripts/install-qtile
+    # Source Cargo env and persist variables
+    - name: Source Cargo env and persist
+      run: |
+        source "$HOME/.cargo/env"
+        echo "PATH=$PATH" >> $GITHUB_ENV
+        echo "CARGO_HOME=$CARGO_HOME" >> $GITHUB_ENV
+        echo "RUSTUP_HOME=$RUSTUP_HOME" >> $GITHUB_ENV
+    # TODO: build image with rust installed?
+    - name: Rust Cargo cache
+      uses: raviqqe/cargo-cache@v1
+    - name: Build
+      run: |
+        cd /home/runner/_work/qtile-cmd-client
+        ls -l
+        cd qtile-cmd-client
+        cargo build -q
     - name: Run tests on X11
       run: ./scripts/run-x11-tests
     - name: Run tests on wayland

@@ -1,0 +1,35 @@
+#!/bin/bash
+
+cd /home/runner
+git clone https://github.com/qtile/qtile.git
+cd qtile
+python3 -m venv venv
+source venv/bin/activate
+python -m pip install --upgrade pip
+which gcc
+pip install 'pywlroots==0.17' &
+wait
+pip install \
+  'build' \
+  'cairocffi>=1.7.0' \
+  'cffi' \
+  'dbus-fast' \
+  'installer' \
+  'pywayland==0.4.17' \
+  'setuptools>=77.0' \
+  "setuptools-scm>=7.0" \
+  'wheel' \
+  'xcffib>=1.4.0' \
+  'xkbcommon>=0.3'
+# pip install 'xkbcommon==1.0.1' 'pywlroots==0.17' 'pywayland==0.4.18' build installer wheel 'cairocffi[xcb]>=1.6.0' 'setuptools-scm>=7.0' 'setuptools_scm>=3.2.0'
+python -m build --no-isolation --wheel
+ls -l
+_site_packages=$(python -c "import site; print(site.getsitepackages()[0])")
+export LC_TYPE=en_US.UTF-8
+export PYTHONPATH="test_dir/$_site_packages:$PYTHONPATH"
+python -m installer --destdir=test_dir dist/*.whl
+ls -l
+./scripts/ffibuild -v
+deactivate
+# chown runner:users /home/runner/qtile -R
+sudo usermod -aG video runner
