@@ -4,21 +4,22 @@ cwd=$(pwd)
 
 cd ~/qtile
 # source venv/bin/activate
-ls ./test_dir"$(pwd)"/venv/bin/qtile && export PATH="./test_dir$(pwd)/venv/bin:$PATH"
+ls ./build_dir"$(pwd)"/venv/bin/qtile && export PATH="./build_dir$(pwd)/venv/bin:$PATH"
 _site_packages=$(python -c "import site; print(site.getsitepackages()[0])")
 export LC_TYPE=en_US.UTF-8
-export PYTHONPATH="test_dir/$_site_packages:$PYTHONPATH"
+export PYTHONPATH="build_dir/$_site_packages:$PYTHONPATH"
 export XDG_RUNTIME_DIR=/tmp
 export WLR_BACKENDS=headless
 export WLR_HEADLESS_OUTPUTS=1
 export WLR_LIBINPUT_NO_DEVICES=1
 export WLR_RENDERER_ALLOW_SOFTWARE=1
 export WLR_RENDERER=pixman
-qtile start -b wayland &
+export logfile=qtile-py"$1".log
+qtile start -b wayland -p "$logfile" &
 
 echo "while ! (qtile cmd-obj -f qtile_info &>/dev/null); do echo socket not responsive yet; sleep 1; done" >wait_for_socket.sh
-timeout 15 bash wait_for_socket.sh
-[[ $? -eq 124 ]] && echo "could not connect to socket, qtile is not running" && ls ~/.local/share/qtile/qtile.log && tail ~/.local/share/qtile/qtile.log && exit 1
+timeout 30 bash wait_for_socket.sh
+[[ $? -eq 124 ]] && echo "could not connect to socket, qtile is not running" && ls "$logfile" && tail "$logfile" && exit 1
 
 qtile cmd-obj -f qtile_info
 
