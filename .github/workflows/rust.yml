@@ -13,46 +13,60 @@ on:
 env:
   CARGO_TERM_COLOR: always
   AGENT_TOOLSDIRECTORY: "/opt/hostedtoolcache"
+  DEBIAN_FRONTEND: "noninteractive"
 
 jobs:
   build-and-test:
     runs-on: arc-runner-set
     strategy:
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13"]
     steps:
-    - uses: actions/checkout@v4
-    - name: Start seatd
-      run: |
-        echo "$PATH" | tr ':' '\n'
-        ls /usr/bin/sudo
-        sudo apt -y install seatd
-        sudo seatd -g video &
+    - name: Checkout
+      uses: actions/checkout@v4
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
+    - name: Setup env
+      shell: bash
+      run: |
+        echo CARGO_TARGET_DIR="$AGENT_TOOLSDIRECTORY"/cargo/target >> ${{ github.env }}
+        echo CARGO_HOME="$AGENT_TOOLSDIRECTORY"/cargo >> ${{ github.env }}
+        echo RUSTUP_HOME="$AGENT_TOOLSDIRECTORY"/rustup >> ${{ github.env }}
     - name: Install deps
       run: |
-        ./scripts/install-deps
+        ./scripts/install-deps $(cat ./deps)
+    - name: Install wayland deps
+      run: |
+        mkdir -p ~/deps
+        cd ~/deps
+        wget https://raw.githubusercontent.com/qtile/qtile/refs/heads/master/scripts/ubuntu_wayland_setup
+        chmod +x ubuntu_wayland_setup
+        bash -x ./ubuntu_wayland_setup
+    - name: Install rustup
+      run: |
+        curl https://sh.rustup.rs -sSf | bash -s -- -y --default-toolchain nightly --profile minimal
+    - name: Install qtile
+      run: |
         ./scripts/install-qtile
     # Source Cargo env and persist variables
     - name: Source Cargo env and persist
       run: |
-        source "$HOME/.cargo/env"
+        source "$CARGO_HOME/env"
         echo "PATH=$PATH" >> $GITHUB_ENV
-        echo "CARGO_HOME=$CARGO_HOME" >> $GITHUB_ENV
-        echo "RUSTUP_HOME=$RUSTUP_HOME" >> $GITHUB_ENV
     # TODO: build image with rust installed?
     - name: Rust Cargo cache
-      uses: raviqqe/cargo-cache@v1
+      uses: ervinpopescu/cargo-cache@hostedtoolcache
     - name: Build
       run: |
-        cd /home/runner/_work/qtile-cmd-client
-        ls -l
-        cd qtile-cmd-client
-        cargo build -q
+        cd /home/runner/_work/qtile-cmd-client/qtile-cmd-client &&
+          cargo clean &&
+          cargo build -q
+    - name: Start seatd
+      run: |
+        sudo seatd -g video &
     - name: Run tests on X11
-      run: ./scripts/run-x11-tests
+      run: ./scripts/run-x11-tests ${{ matrix.python-version }}
     - name: Run tests on wayland
-      run: ./scripts/run-wl-tests
+      run: ./scripts/run-wl-tests ${{ matrix.python-version }}

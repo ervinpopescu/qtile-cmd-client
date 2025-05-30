@@ -1,14 +1,14 @@
 #!/bin/bash
 
 cd /home/runner
-git clone https://github.com/qtile/qtile.git
+git clone https://github.com/qtile/qtile
 cd qtile
+git fetch origin pull/5300/head:pr5300
+git checkout pr5300
 python3 -m venv venv
 source venv/bin/activate
 python -m pip install --upgrade pip
-which gcc
-pip install 'pywlroots==0.17' &
-wait
+pip install 'pywlroots==0.17'
 pip install \
   'build' \
   'cairocffi>=1.7.0' \
@@ -23,12 +23,10 @@ pip install \
   'xkbcommon>=0.3'
 # pip install 'xkbcommon==1.0.1' 'pywlroots==0.17' 'pywayland==0.4.18' build installer wheel 'cairocffi[xcb]>=1.6.0' 'setuptools-scm>=7.0' 'setuptools_scm>=3.2.0'
 python -m build --no-isolation --wheel
-ls -l
 _site_packages=$(python -c "import site; print(site.getsitepackages()[0])")
 export LC_TYPE=en_US.UTF-8
-export PYTHONPATH="test_dir/$_site_packages:$PYTHONPATH"
-python -m installer --destdir=test_dir dist/*.whl
-ls -l
+export PYTHONPATH="build_dir/$_site_packages:$PYTHONPATH"
+python -m installer --destdir=build_dir dist/*.whl
 ./scripts/ffibuild -v
 deactivate
 # chown runner:users /home/runner/qtile -R

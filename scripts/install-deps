@@ -1,78 +1,13 @@
 #!/usr/bin/env bash
 
 set -ex
-wget https://raw.githubusercontent.com/qtile/qtile/refs/heads/master/scripts/ubuntu_wayland_setup
-chmod +x ubuntu_wayland_setup
-bash -x ./ubuntu_wayland_setup &
-wait
 
-sudo apt -y install \
-  drm-info \
-  gir1.2-gdkpixbuf-2.0 \
-  gir1.2-gtk-3.0 \
-  gir1.2-gudev-1.0 \
-  gir1.2-notify-0.7 \
-  graphviz \
-  imagemagick \
-  jq \
-  libcairo2-dev \
-  libd3dadapter9-mesa \
-  libd3dadapter9-mesa-dev \
-  libdbus-1-dev \
-  libdrm-dev \
-  libegl-mesa0 \
-  libegl1-mesa-dev \
-  libepoxy-dev \
-  libgbm-dev \
-  libgbm1 \
-  libgdk-pixbuf-2.0-0 \
-  libgirepository-2.0-dev \
-  libgl1-mesa-dev \
-  libgl1-mesa-dri \
-  libglapi-mesa \
-  libgles2-mesa-dev \
-  libglx-mesa0 \
-  libinput-dev \
-  libjson-c-dev \
-  libnotify-bin \
-  libosmesa6 \
-  libosmesa6-dev \
-  libpango-1.0-0 \
-  libpangocairo-1.0-0 \
-  libpciaccess-dev \
-  librsvg2-dev \
-  libtirpc-dev \
-  libwlroots-dev \
-  libxatracker-dev \
-  libxatracker2 \
-  libxcb-composite0-dev \
-  libxcb-dri3-dev \
-  libxcb-ewmh-dev \
-  libxcb-icccm4-dev \
-  libxcb-image0-dev \
-  libxcb-present-dev \
-  libxcb-render0-dev \
-  libxcb-res0-dev \
-  libxcb-xfixes0-dev \
-  libxcb-xinput-dev \
-  libxcb1-dev \
-  libxfont-dev \
-  libxkbcommon-dev \
-  libxshmfence-dev \
-  meson \
-  ninja-build \
-  policykit-1 \
-  xfonts-utils \
-  xserver-xephyr \
-  xserver-xorg-dev \
-  xvfb \
-  xwayland \
-  & # python-gi-dev \
-# mesa-drm-shim \
-# mesa-opencl-icd \
-# mesa-va-drivers \
-# mesa-vdpau-drivers \
-# mesa-vulkan-drivers \
+sudo rm -fr /var/lib/apt/lists/*
 
-curl https://sh.rustup.rs -sSf | bash -s -- -y --default-toolchain nightly --profile minimal &
-wait
+sudo apt -y update &&
+  sudo apt -y upgrade &&
+  sudo apt -y install "$@"
+# drm-info
+# mesa-drm-shim
+# mesa-va-drivers # mesa-vulkan-drivers # python-gi-dev
+# mesa-opencl-icd # mesa-vdpau-drivers
