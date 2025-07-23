@@ -46,7 +46,7 @@ jobs:
         bash -x ./ubuntu_wayland_setup
     - name: Install rustup
       run: |
-        curl https://sh.rustup.rs -sSf | bash -s -- -y --default-toolchain nightly --profile minimal
+        curl https://sh.rustup.rs -sSf | bash -s -- -y --default-toolchain stable --profile minimal
     - name: Install qtile
       run: |
         ./scripts/install-qtile
@@ -54,14 +54,14 @@ jobs:
     - name: Source Cargo env and persist
       run: |
         source "$CARGO_HOME/env"
-        echo "PATH=$PATH" >> $GITHUB_ENV
+        echo "PATH=$PATH" >> ${{ github.env }}
     # TODO: build image with rust installed?
-    - name: Rust Cargo cache
-      uses: ervinpopescu/cargo-cache@hostedtoolcache
+    # - name: Rust Cargo cache
+    #   uses: ervinpopescu/cargo-cache@hostedtoolcache
     - name: Build
       run: |
         cd /home/runner/_work/qtile-cmd-client/qtile-cmd-client &&
-          cargo clean &&
+          # cargo clean &&
           cargo build -q
     - name: Start seatd
       run: |
