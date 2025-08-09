@@ -17,7 +17,7 @@ env:
 
 jobs:
   build-and-test:
-    runs-on: arc-runner-set
+    runs-on: qtile-runner-set
     strategy:
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
@@ -43,9 +43,10 @@ jobs:
         sed -in -e 's/cache/$cache/' -e "s,mkdir -p \$cache,cache=\"$AGENT_TOOLSDIRECTORY/wayland\"\nmkdir -p \$cache\ncd \$cache," ubuntu_wayland_setup
         chmod +x ubuntu_wayland_setup
         bash -x ./ubuntu_wayland_setup
-    - name: Install rustup
-      run: |
-        curl https://sh.rustup.rs -sSf | bash -s -- -y --default-toolchain stable --profile minimal
+        # NOTE: rustup is installed
+    # - name: Install rustup
+    #   run: |
+    #     curl https://sh.rustup.rs -sSf | bash -s -- -y --default-toolchain stable --profile minimal
     - name: Install qtile
       run: |
         ./scripts/install-qtile

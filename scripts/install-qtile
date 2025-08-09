@@ -3,8 +3,6 @@
 cd /home/runner
 git clone https://github.com/qtile/qtile
 cd qtile
-git fetch origin pull/5300/head:pr5300
-git checkout pr5300
 python3 -m venv venv
 source venv/bin/activate
 python -m pip install --upgrade pip
