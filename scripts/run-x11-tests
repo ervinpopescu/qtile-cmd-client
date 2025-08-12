@@ -1,16 +1,8 @@
 #!/usr/bin/env bash
 
-cwd=$(pwd)
-
 export DISPLAY=:99
 sudo Xvfb -ac $DISPLAY -screen 0 1280x1024x24 &>/dev/null &
 
-cd ~/qtile
-# source venv/bin/activate
-ls ./build_dir"$(pwd)"/venv/bin/qtile && export PATH="./build_dir$(pwd)/venv/bin:$PATH"
-_site_packages=$(python -c "import site; print(site.getsitepackages()[0])")
-export LC_TYPE=en_US.UTF-8
-export PYTHONPATH="build_dir/$_site_packages:$PYTHONPATH"
 export logfile=qtile-py"$1".log
 qtile start -p "$logfile" &
 
@@ -19,9 +11,7 @@ timeout 30 bash wait_for_socket.sh
 [[ $? -eq 124 ]] && echo "could not connect to socket, qtile is not running" && ls "$logfile" && tail "$logfile" && exit 1
 
 qtile cmd-obj -f qtile_info
-
-cd $cwd
 cargo test --lib -q -- --nocapture || export FAIL=1
+
 pkill -9 qtile
 if [[ $FAIL -eq 1 ]]; then exit 1; fi
-# deactivate

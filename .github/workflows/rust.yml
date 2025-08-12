@@ -39,6 +39,8 @@ jobs:
         ./scripts/install-deps $(cat ./deps)
     - name: Install wayland deps
       run: |
+        mkdir -p ~/wayland-deps
+        cd ~/wayland-deps
         wget https://raw.githubusercontent.com/qtile/qtile/refs/heads/master/scripts/ubuntu_wayland_setup
         sed -in -e 's/cache/$cache/' -e "s,mkdir -p \$cache,cache=\"$AGENT_TOOLSDIRECTORY/wayland\"\nmkdir -p \$cache\ncd \$cache," ubuntu_wayland_setup
         chmod +x ubuntu_wayland_setup
@@ -49,7 +51,7 @@ jobs:
     #     curl https://sh.rustup.rs -sSf | bash -s -- -y --default-toolchain stable --profile minimal
     - name: Install qtile
       run: |
-        ./scripts/install-qtile
+        ./scripts/install-qtile ${{ matrix.python-version }}
     # Source Cargo env and persist variables
     - name: Source Cargo env and persist
       run: |
