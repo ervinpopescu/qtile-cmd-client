@@ -1,32 +1,18 @@
 #!/bin/bash
 
-cd /home/runner
+set -x
+
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source $HOME/.local/bin/env
+
 git clone https://github.com/qtile/qtile
 cd qtile
-git checkout v0.33.0
-python3 -m venv venv
-source venv/bin/activate
-python -m pip install --upgrade pip
-pip install 'pywlroots==0.17'
-pip install \
-  'build' \
-  'cairocffi>=1.7.0' \
-  'cffi' \
-  'dbus-fast' \
-  'installer' \
-  'pywayland==0.4.17' \
-  'setuptools>=77.0' \
-  "setuptools-scm>=7.0" \
-  'wheel' \
-  'xcffib>=1.4.0' \
-  'xkbcommon>=0.3'
-# pip install 'xkbcommon==1.0.1' 'pywlroots==0.17' 'pywayland==0.4.18' build installer wheel 'cairocffi[xcb]>=1.6.0' 'setuptools-scm>=7.0' 'setuptools_scm>=3.2.0'
-python -m build --no-isolation --wheel
-_site_packages=$(python -c "import site; print(site.getsitepackages()[0])")
-export LC_TYPE=en_US.UTF-8
-export PYTHONPATH="build_dir/$_site_packages:$PYTHONPATH"
-python -m installer --destdir=build_dir dist/*.whl
-./scripts/ffibuild -v
-deactivate
+
+uv sync --python="$1" --all-extras
+uv tool install .
+uv tool install --reinstall ".[wayland]" # reinstall with wayland deps
+uv run --python="$1" --with setuptools --directory=$(uv tool dir)/qtile/lib/python"$1"/site-packages/ $(uv tool dir)/qtile/lib/python"$1"/site-packages/libqtile/backend/wayland/cffi/build.py
+ls /home/runner/.local/share/uv/tools/qtile/lib/python3.12/site-packages/libqtile/backend/wayland/ -r
+
 # chown runner:users /home/runner/qtile -R
 sudo usermod -aG video runner
