@@ -2,6 +2,7 @@
 
 set -x
 
+unset DISPLAY
 export LC_TYPE=en_US.UTF-8
 export XDG_RUNTIME_DIR=/tmp
 export WLR_BACKENDS=headless
