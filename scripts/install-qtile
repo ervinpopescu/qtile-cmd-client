@@ -7,12 +7,16 @@ source $HOME/.local/bin/env
 
 git clone https://github.com/qtile/qtile
 cd qtile
+git fetch upstream pull/5452/head:pr5452
+git checkout pr5452
 
 uv sync --python="$1" --all-extras
+uv run --python="$1" libqtile/backend/wayland/cffi/build.py
+ls libqtile/backend/wayland -R
 uv tool install .
 uv tool install --reinstall ".[wayland]" # reinstall with wayland deps
-uv run --python="$1" --with setuptools --directory=$(uv tool dir)/qtile/lib/python"$1"/site-packages/ $(uv tool dir)/qtile/lib/python"$1"/site-packages/libqtile/backend/wayland/cffi/build.py
-ls /home/runner/.local/share/uv/tools/qtile/lib/python3.12/site-packages/libqtile/backend/wayland/ -r
+ls libqtile/backend/wayland -R
+ls /home/runner/.local/share/uv/tools/qtile/lib/python3.12/site-packages/libqtile/backend/wayland/ -R
 
 # chown runner:users /home/runner/qtile -R
 sudo usermod -aG video runner
