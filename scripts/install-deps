@@ -4,10 +4,37 @@ set -ex
 
 sudo rm -fr /var/lib/apt/lists/*
 
-sudo apt -y update &&
-  sudo apt -y upgrade &&
-  sudo apt -y install "$@"
-# drm-info
-# mesa-drm-shim
-# mesa-va-drivers # mesa-vulkan-drivers # python-gi-dev
-# mesa-opencl-icd # mesa-vdpau-drivers
+# sudo apt -y update &&
+#   sudo apt -y upgrade &&
+sudo apt -y install "$@"
+
+wget https://raw.githubusercontent.com/qtile/qtile/refs/heads/master/scripts/ubuntu_wayland_setup
+
+cat >replacement.txt <<'EOF'
+cache="$AGENT_TOOLSDIRECTORY/wayland"
+mkdir -p $cache
+cd $cache
+if ! [ -f lock ]; then
+  touch lock
+else
+  until ! [ -f lock ]; do
+    echo "waiting for wayland deps lock"
+    sleep 1
+  done
+fi
+EOF
+
+sed -i \
+  -e 's/cache/$cache/' \
+  -e "/mkdir -p \$cache/{
+      r replacement.txt
+      d
+    }" \
+  -e '$a\
+if [ -f lock ]; then\
+  rm lock\
+else\
+  echo the other runner already removed the lock\
+fi' ubuntu_wayland_setup
+
+bash -x ./ubuntu_wayland_setup
