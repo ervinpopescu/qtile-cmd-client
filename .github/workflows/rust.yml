@@ -37,33 +37,16 @@ jobs:
     - name: Install deps
       run: |
         ./scripts/install-deps $(cat ./deps)
-    - name: Install wayland deps
-      run: |
-        mkdir -p ~/wayland-deps
-        cd ~/wayland-deps
-        wget https://raw.githubusercontent.com/qtile/qtile/refs/heads/master/scripts/ubuntu_wayland_setup
-        sed -in -e 's/cache/$cache/' -e "s,mkdir -p \$cache,cache=\"$AGENT_TOOLSDIRECTORY/wayland\"\nmkdir -p \$cache\ncd \$cache," ubuntu_wayland_setup
-        chmod +x ubuntu_wayland_setup
-        bash -x ./ubuntu_wayland_setup
-    # NOTE: rustup is installed
-    # - name: Install rustup
-    #   run: |
-    #     curl https://sh.rustup.rs -sSf | bash -s -- -y --default-toolchain stable --profile minimal
     - name: Install qtile
       run: |
         ./scripts/install-qtile ${{ matrix.python-version }}
-    # Source Cargo env and persist variables
     - name: Source Cargo env and persist
       run: |
         source "$CARGO_HOME/env"
         echo "PATH=$PATH" >> ${{ github.env }}
-    # TODO: build image with rust installed?
-    # - name: Rust Cargo cache
-    #   uses: ervinpopescu/cargo-cache@hostedtoolcache
     - name: Build
       run: |
         cd /home/runner/_work/qtile-cmd-client/qtile-cmd-client &&
-          # cargo clean &&
           cargo build -q
     - name: Start seatd
       run: |

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -x
+set -ex
 
 curl -LsSf https://astral.sh/uv/install.sh | sh
 source $HOME/.local/bin/env
@@ -12,7 +12,6 @@ uv sync --python="$1" --all-extras
 uv run --python="$1" libqtile/backend/wayland/cffi/build.py
 uv tool install .
 uv tool install --reinstall ".[wayland]" # reinstall with wayland deps
-ls $(uv tool dir)/qtile/lib/python"$1"/site-packages/libqtile/backend/wayland/ -R
 
 # chown runner:users /home/runner/qtile -R
 sudo usermod -aG video runner
