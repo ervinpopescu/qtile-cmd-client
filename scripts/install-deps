@@ -2,11 +2,11 @@
 
 set -ex
 
-sudo rm -fr /var/lib/apt/lists/*
+# sudo rm -fr /var/lib/apt/lists/*
 
-# sudo apt -y update &&
-#   sudo apt -y upgrade &&
-sudo apt -y install "$@"
+sudo apt -y update &&
+  sudo apt -y upgrade &&
+  sudo apt -y install "$@"
 
 wget https://raw.githubusercontent.com/qtile/qtile/refs/heads/master/scripts/ubuntu_wayland_setup
 
