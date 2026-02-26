@@ -1,7 +1,4 @@
-name: Rust
-# defaults:
-#   run:
-#     shell: bash -ieo pipefail {0}
+name: Rust CI
 
 on:
   push:
@@ -13,45 +10,93 @@ on:
 env:
   CARGO_TERM_COLOR: always
   AGENT_TOOLSDIRECTORY: "/opt/hostedtoolcache"
+  RUSTUP_HOME: "/opt/hostedtoolcache/rustup"
+  CARGO_HOME: "/opt/hostedtoolcache/cargo"
+  CARGO_TARGET_DIR: "/opt/hostedtoolcache/cargo/target"
+  UV_INSTALL_DIR: "/opt/hostedtoolcache/uv"
+  UV_CACHE_DIR: "/opt/hostedtoolcache/uv-cache"
+  UV_PYTHON_INSTALL_DIR: "/opt/hostedtoolcache/uv/python"
+  UV_PYTHON_PREFERENCE: only-managed
+  # PVC Paths for pre-built Wayland dependencies
+  WAYLAND_INSTALL_DIR: "/opt/hostedtoolcache/qtile-deps/wayland/install"
+  PKG_CONFIG_PATH: "/opt/hostedtoolcache/qtile-deps/wayland/install/lib/pkgconfig:/opt/hostedtoolcache/qtile-deps/wayland/install/share/pkgconfig"
+  LD_LIBRARY_PATH: "/opt/hostedtoolcache/qtile-deps/wayland/install/lib"
+  PATH: "/opt/hostedtoolcache/qtile-deps/wayland/install/bin:/opt/hostedtoolcache/uv/bin:/opt/hostedtoolcache/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   DEBIAN_FRONTEND: "noninteractive"
 
 jobs:
-  build-and-test:
+  lint:
+    name: Lint & Format
     runs-on: qtile
     strategy:
       matrix:
-        python-version: ["3.12", "3.13"]
+        rust: [stable, nightly]
+    continue-on-error: ${{ matrix.rust == 'nightly' }}
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Setup env
-      shell: bash
-      run: |
-        echo CARGO_TARGET_DIR="$AGENT_TOOLSDIRECTORY"/cargo/target >> ${{ github.env }}
-        echo CARGO_HOME="$AGENT_TOOLSDIRECTORY"/cargo >> ${{ github.env }}
-        echo RUSTUP_HOME="$AGENT_TOOLSDIRECTORY"/rustup >> ${{ github.env }}
-    - name: Install deps
-      run: |
-        ./scripts/install-deps $(cat ./deps)
-    - name: Install qtile
-      run: |
-        ./scripts/install-qtile ${{ matrix.python-version }}
-    - name: Source Cargo env and persist
-      run: |
-        source "$CARGO_HOME/env"
-        echo "PATH=$PATH" >> ${{ github.env }}
-    - name: Build
-      run: |
-        cd /home/runner/_work/qtile-cmd-client/qtile-cmd-client &&
-          cargo build -q
-    - name: Start seatd
-      run: |
-        sudo seatd -g video &
-    - name: Run tests on X11
-      run: ./scripts/run-x11-tests ${{ matrix.python-version }}
-    - name: Run tests on wayland
-      run: ./scripts/run-wl-tests ${{ matrix.python-version }}
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt, clippy
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          save-if: false
+
+      - name: Format check
+        run: cargo fmt -- --check
+
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+
+  test:
+    name: Test (Python ${{ matrix.python-version }}, Rust ${{ matrix.rust }})
+    needs: lint
+    runs-on: qtile
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+        rust: [stable, nightly]
+
+    continue-on-error: ${{ matrix.python-version == '3.14' || matrix.rust == 'nightly' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: add uv bin dir to PATH
+        run: echo "${{ env.UV_INSTALL_DIR }}/bin" >> $GITHUB_PATH
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          save-if: false
+
+      - name: Install System Deps
+        run: |
+          ./scripts/install-deps $(cat ./deps)
+
+      - name: Install Qtile via uv
+        run: |
+          ./scripts/install-qtile ${{ matrix.python-version }}
+          # Ensure uv tools are in path
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Start seatd
+        run: |
+          sudo seatd -g video &
+          sleep 1
+
+      - name: Run X11 Tests
+        run: ./scripts/run-x11-tests ${{ matrix.python-version }}
+
+      - name: Run Wayland Tests
+        run: ./scripts/run-wl-tests ${{ matrix.python-version }}
