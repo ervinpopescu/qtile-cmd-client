@@ -22,13 +22,14 @@ pub(crate) static OBJECTS: &[&str] = &[
 
 /// Basically a Union
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub enum Selector {
     /// String for some objects
     String(String),
     /// Int for some other objects
     Int(u32),
     /// Select current object
+    #[default]
     Null,
 }
 
@@ -39,12 +40,6 @@ impl Clone for Selector {
             Selector::Int(i) => Selector::Int(*i),
             Selector::Null => Selector::Null,
         }
-    }
-}
-
-impl Default for Selector {
-    fn default() -> Self {
-        Self::Null
     }
 }
 

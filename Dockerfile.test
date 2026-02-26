@@ -1,0 +1,40 @@
+# Use Debian Sid (unstable) to get the latest wlroots 0.19 required by Qtile master
+FROM debian:sid-slim AS base
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV RUST_HOME=/usr/local/rustup
+ENV CARGO_HOME=/usr/local/cargo
+ENV CARGO_TARGET_DIR=/app/target
+ENV PATH=$CARGO_HOME/bin:/root/.local/bin:/uv/bin:$PATH
+
+# Install base tools
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    wget \
+    build-essential \
+    sudo \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+
+# Install uv for Python management
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uv/bin/
+
+# Set up workspace
+WORKDIR /app
+COPY . .
+
+# Install system dependencies using the shared script
+# This ensures consistency between Docker and Host
+RUN ./scripts/install-deps $(cat deps)
+
+# Install Qtile
+ARG PYTHON_VERSION=3.12
+RUN ./scripts/install-qtile ${PYTHON_VERSION}
+
+# Default command: run tests
+CMD ["./scripts/run-x11-tests", "3.12"]

@@ -2,39 +2,73 @@
 
 set -ex
 
-# sudo rm -fr /var/lib/apt/lists/*
+# Use the shared tool cache if available
+CACHE_DIR="${AGENT_TOOLSDIRECTORY:-/tmp}/qtile-deps"
+WAYLAND_CACHE="$CACHE_DIR/wayland"
+mkdir -p "$WAYLAND_CACHE"
 
-sudo apt -y update &&
-  sudo apt -y upgrade &&
-  sudo apt -y install "$@"
+# Detect OS
+OS_RELEASE=$(grep -oP '(?<=^ID=).+' /etc/os-release | tr -d '"')
 
-wget https://raw.githubusercontent.com/qtile/qtile/refs/heads/master/scripts/ubuntu_wayland_setup
+case "$OS_RELEASE" in
+ubuntu)
+  sudo apt -y update
+  sudo apt -y install software-properties-common
+  sudo add-apt-repository -y universe
+  sudo add-apt-repository -y multiverse
+  ;;
+debian)
+  sudo apt -y update
+  ;;
+*)
+  echo "Unsupported OS: $OS_RELEASE"
+  ;;
+esac
 
-cat >replacement.txt <<'EOF'
-cache="$AGENT_TOOLSDIRECTORY/wayland"
-mkdir -p $cache
-cd $cache
-if ! [ -f lock ]; then
-  touch lock
-else
-  until ! [ -f lock ]; do
-    echo "waiting for wayland deps lock"
-    sleep 1
-  done
+sudo apt -y upgrade
+sudo apt -y install "$@"
+
+# Handle Wayland setup using the shared cache
+wget -O /tmp/ubuntu_wayland_setup https://raw.githubusercontent.com/qtile/qtile/refs/heads/master/scripts/ubuntu_wayland_setup
+
+# Patch the script to use our shared path and run EVERYTHING inside it
+sed -i "s|mkdir -p cache|cache=\"$WAYLAND_CACHE\"; mkdir -p \"\$cache\"; cd \"\$cache\"|g" /tmp/ubuntu_wayland_setup
+# shellcheck disable=SC2016
+sed -i 's|if \[ -f "cache/\$filename" \];|if [ -f "$filename" ];|g' /tmp/ubuntu_wayland_setup
+sed -i 's|wget -P cache|wget -P .|g' /tmp/ubuntu_wayland_setup
+sed -i 's|"cache/|"./|g' /tmp/ubuntu_wayland_setup
+
+# Use a granular lock based on script content
+SCRIPT_HASH=$(sha256sum /tmp/ubuntu_wayland_setup | cut -d' ' -f1 | head -c 8)
+LOCK_FILE="$WAYLAND_CACHE/lock.$SCRIPT_HASH"
+
+# Create a robust locking wrapper
+cat >/tmp/with_lock.sh <<'EOF'
+lock_file="$1"
+shift
+
+# Stale lock detection (30 minutes)
+if [ -f "$lock_file" ]; then
+  if [ "$(( $(date +%s) - $(stat -c %Y "$lock_file") ))" -gt 1800 ]; then
+    echo "Found stale lock (older than 30 mins), removing..."
+    rm -f "$lock_file"
+  fi
 fi
+
+# Exponential backoff wait
+WAIT_TIME=5
+while [ -f "$lock_file" ]; do
+  echo "Waiting for Wayland deps lock ($lock_file)..."
+  sleep "$WAIT_TIME"
+  WAIT_TIME=$(( WAIT_TIME + 5 ))
+  if [ "$WAIT_TIME" -gt 60 ]; then WAIT_TIME=60; fi
+done
+
+touch "$lock_file"
+trap 'rm -f "$lock_file"' EXIT
+
+"$@"
 EOF
 
-sed -i \
-  -e 's/cache/$cache/' \
-  -e "/mkdir -p \$cache/{
-      r replacement.txt
-      d
-    }" \
-  -e '$a\
-if [ -f lock ]; then\
-  rm lock\
-else\
-  echo the other runner already removed the lock\
-fi' ubuntu_wayland_setup
-
-bash -x ./ubuntu_wayland_setup
+# Execute the patched setup script through the locking wrapper
+bash /tmp/with_lock.sh "$LOCK_FILE" bash /tmp/ubuntu_wayland_setup
