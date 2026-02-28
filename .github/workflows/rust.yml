@@ -7,6 +7,10 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   AGENT_TOOLSDIRECTORY: "/opt/hostedtoolcache"
@@ -21,7 +25,6 @@ env:
   WAYLAND_INSTALL_DIR: "/opt/hostedtoolcache/qtile-deps/wayland/install"
   PKG_CONFIG_PATH: "/opt/hostedtoolcache/qtile-deps/wayland/install/lib/pkgconfig:/opt/hostedtoolcache/qtile-deps/wayland/install/share/pkgconfig"
   LD_LIBRARY_PATH: "/opt/hostedtoolcache/qtile-deps/wayland/install/lib"
-  PATH: "/opt/hostedtoolcache/qtile-deps/wayland/install/bin:/opt/hostedtoolcache/uv/bin:/opt/hostedtoolcache/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   DEBIAN_FRONTEND: "noninteractive"
 
 jobs:
@@ -31,9 +34,13 @@ jobs:
     strategy:
       matrix:
         rust: [stable, nightly]
-    continue-on-error: ${{ matrix.rust == 'nightly' }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: update GITHUB_PATH
+        run: |
+          echo "${{ env.CARGO_HOME }}/bin" >> $GITHUB_PATH
+          echo "${{ env.RUSTUP_HOME }}/bin" >> $GITHUB_PATH
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@master
@@ -62,13 +69,16 @@ jobs:
         python-version: ["3.12", "3.13", "3.14"]
         rust: [stable, nightly]
 
-    continue-on-error: ${{ matrix.python-version == '3.14' || matrix.rust == 'nightly' }}
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: add uv bin dir to PATH
-        run: echo "${{ env.UV_INSTALL_DIR }}/bin" >> $GITHUB_PATH
+      - name: update GITHUB_PATH
+        run: |
+          echo "${{ env.WAYLAND_INSTALL_DIR }}/bin" >> $GITHUB_PATH
+          echo "${{ env.UV_INSTALL_DIR }}/bin" >> $GITHUB_PATH
+          echo "${{ env.CARGO_HOME }}/bin" >> $GITHUB_PATH
+          echo "${{ env.RUSTUP_HOME }}/bin" >> $GITHUB_PATH
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@master
@@ -81,14 +91,10 @@ jobs:
           save-if: false
 
       - name: Install System Deps
-        run: |
-          ./scripts/install-deps $(cat ./deps)
+        run: ./scripts/install-deps $(cat ./deps)
 
       - name: Install Qtile via uv
-        run: |
-          ./scripts/install-qtile ${{ matrix.python-version }}
-          # Ensure uv tools are in path
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
+        run: ./scripts/install-qtile ${{ matrix.python-version }}
 
       - name: Start seatd
         run: |
