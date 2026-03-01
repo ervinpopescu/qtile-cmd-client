@@ -55,7 +55,7 @@ jobs:
           rustup default stable
 
       - name: Install System Deps
-        run: ./scripts/install-deps $(cat ./deps)
+        run: ./.github/scripts/install-deps $(cat ./deps)
 
   lint:
     name: Lint & Format (${{ matrix.rust }})
@@ -105,11 +105,11 @@ jobs:
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Install System Deps
-        run: ./scripts/install-deps $(cat ./deps)
+        run: ./.github/scripts/install-deps $(cat ./deps)
 
       - name: Install Qtile via uv
         run: |
-          ./scripts/install-qtile ${{ matrix.python-version }}
+          ./.github/scripts/install-qtile ${{ matrix.python-version }}
 
       - name: Start seatd
         run: |
@@ -117,9 +117,9 @@ jobs:
           sleep 1
 
       - name: Run X11 Tests
-        run: ./scripts/run-x11-tests ${{ matrix.python-version }}
+        run: ./.github/scripts/run-x11-tests ${{ matrix.python-version }}
 
       - name: Run Wayland Tests
         env:
           XWAYLAND: ${{ env.WAYLAND_INSTALL_DIR }}/bin/Xwayland
-        run: ./scripts/run-wl-tests ${{ matrix.python-version }}
+        run: ./.github/scripts/run-wl-tests ${{ matrix.python-version }}

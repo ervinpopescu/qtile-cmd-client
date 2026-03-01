@@ -99,7 +99,7 @@ sed -i 's|wget -P cache|wget -P .|g' "$TEMP_SETUP"
 sed -i 's|"cache/|"./|g' "$TEMP_SETUP"
 
 # Use the python helper for granular safety within the script itself
-python3 ./scripts/patch_wayland_setup.py "$TEMP_SETUP" "$PATCHED_SETUP"
+python3 ./.github/scripts/patch_wayland_setup.py "$TEMP_SETUP" "$PATCHED_SETUP"
 
 bash "$PATCHED_SETUP"
 rm -f "$PATCHED_SETUP"
