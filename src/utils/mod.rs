@@ -12,3 +12,5 @@ pub mod graph;
 pub mod ipc;
 /// CommandParser (from CLI or directly from parameters)
 pub mod parser;
+/// Interactive REPL mode
+pub mod repl;

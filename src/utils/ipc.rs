@@ -2,62 +2,55 @@ use std::{
     io::{Read, Write},
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
+    sync::OnceLock,
 };
 
 use anyhow::{bail, Context};
 use serde_json::Value;
 use shellexpand::tilde;
 
-/// Finds the appropriate socket file for the given display.
-///
-/// If unspecified, the socket file is determined as follows:
-///
-///    - If WAYLAND_DISPLAY is set, use it.
-///    - else if DISPLAY is set, use that.
-///    - else check for the existence of a socket file for WAYLAND_DISPLAY=wayland-0
-///      and if it exists, use it.
-///    - else check for the existence of a socket file for DISPLAY=:0
-///      and if it exists, use it.
+static SOCKFILE: OnceLock<PathBuf> = OnceLock::new();
+
+/// Returns the cached or newly discovered path to the Qtile IPC socket.
+fn get_sockfile() -> &'static Path {
+    SOCKFILE.get_or_init(|| find_sockfile(None))
+}
+
+/// Discovers the Qtile socket file path by checking the following in order:
+/// 1.  An explicitly provided display name.
+/// 2.  `WAYLAND_DISPLAY` environment variable.
+/// 3.  `DISPLAY` environment variable.
+/// 4.  Default locations for Wayland (`wayland-0`) and X11 (`:0`).
 fn find_sockfile(display: Option<String>) -> PathBuf {
     let xdg_cache_home = std::env::var("XDG_CACHE_HOME").unwrap_or(tilde("~/.cache").to_string());
     let cache_dir = Path::new(&xdg_cache_home);
     let sockfile: PathBuf;
     match display {
         Some(s) => {
-            sockfile = cache_dir.join("qtile").join(format!("qtilesocket.{}", s));
-            // eprintln!("sockfile: {sockfile:#?}");
+            sockfile = cache_dir.join("qtile").join(format!("qtilesocket.{s}"));
             sockfile
         }
         None => match std::env::var("WAYLAND_DISPLAY") {
             Ok(s) => {
-                sockfile = cache_dir.join("qtile").join(format!("qtilesocket.{}", s));
-                // eprintln!("sockfile: {sockfile:#?}");
+                sockfile = cache_dir.join("qtile").join(format!("qtilesocket.{s}"));
                 sockfile
             }
             Err(_) => match std::env::var("DISPLAY") {
                 Ok(s) => {
-                    sockfile = cache_dir.join("qtile").join(format!("qtilesocket.{}", s));
-                    // eprintln!("sockfile: {sockfile:#?}");
+                    sockfile = cache_dir.join("qtile").join(format!("qtilesocket.{s}"));
                     sockfile
                 }
                 Err(_) => {
-                    let mut sockfile = cache_dir
-                        .join("qtile")
-                        .join(format!("qtilesocket.{}", "wayland-0"));
+                    let mut sockfile = cache_dir.join("qtile").join("qtilesocket.wayland-0");
                     if std::path::Path::exists(&sockfile) {
-                        // eprintln!("sockfile: {sockfile:#?}");
                         return sockfile;
                     }
 
-                    sockfile = cache_dir
-                        .join("qtile")
-                        .join(format!("qtilesocket.{}", ":0"));
+                    sockfile = cache_dir.join("qtile").join("qtilesocket.:0");
                     if std::path::Path::exists(&sockfile) {
-                        // eprintln!("sockfile: {sockfile:#?}");
                         return sockfile;
                     }
 
-                    // eprintln!("sockfile: {sockfile:#?}");
                     sockfile
                 }
             },
@@ -65,16 +58,14 @@ fn find_sockfile(display: Option<String>) -> PathBuf {
     }
 }
 
-/// IPC client which is used for sending the "requests" to `qtile`'s socket
+/// Client for communicating with the Qtile IPC socket.
 pub struct Client {}
 impl Client {
-    /// Send the message to the server.
-    ///
-    /// Connect to the server, then pack and send the message to the server,
-    /// then wait for and return the response from the server.
+    /// Connects to the socket, sends the payload, and returns the raw response.
     pub fn send(data: String) -> anyhow::Result<String> {
-        let mut stream =
-            UnixStream::connect(find_sockfile(None)).expect("could not connect to socket");
+        let sockfile = get_sockfile();
+        let mut stream = UnixStream::connect(sockfile)
+            .with_context(|| format!("could not connect to socket: {sockfile:?}"))?;
         stream.write_all(data.as_bytes())?;
         stream
             .shutdown(std::net::Shutdown::Write)
@@ -83,8 +74,11 @@ impl Client {
         stream.read_to_string(&mut response)?;
         Ok(response)
     }
-    /// Match a response from a [`String`] to a [`serde_json::Value`] based on how qtile should or
-    /// shouldn't respond
+
+    /// Validates and parses the Qtile IPC response.
+    ///
+    /// The response is expected to be a JSON array where the first element
+    /// is a status code (0 for success) and the second is the result or error message.
     pub fn match_response(response: anyhow::Result<String>) -> anyhow::Result<Value> {
         match response {
             Ok(response) => match serde_json::from_str(&response) {
@@ -94,7 +88,7 @@ impl Client {
                         let result = &array[1];
                         match status {
                             Value::Number(n) => {
-                                let n = n.as_u64().unwrap();
+                                let n = n.as_u64().context("ipc.Client: invalid status code")?;
                                 match n {
                                     0 => Ok(result.clone()),
                                     n => match result {

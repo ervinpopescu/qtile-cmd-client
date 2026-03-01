@@ -42,5 +42,10 @@ pub enum Commands {
         #[arg(short, long, num_args = 0)]
         /// With both `-o`/`--object` and ``-f``/``--function`` args prints documentation for function.
         info: bool,
+        #[arg(short, long, num_args = 0)]
+        /// Output the result as JSON.
+        json: bool,
     },
+    /// Start an interactive REPL session.
+    Repl,
 }
