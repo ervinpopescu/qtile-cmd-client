@@ -17,9 +17,8 @@ PYTHON_VERSION="${1:-3.12}"
 uv sync --python="$PYTHON_VERSION" --all-extras
 uv run ./libqtile/backend/wayland/cffi/build.py
 
-# Install qtile as a tool with wayland support
-# We must use --with to include dependencies for the extra
-uv tool install . --with ".[wayland]" --python "$PYTHON_VERSION" --force
+# Install qtile as a tool with wayland support and optional dbus-fast
+uv tool install . --with ".[wayland],dbus-fast" --python "$PYTHON_VERSION" --force
 
 # Add runner to video group if it exists
 if getent group video >/dev/null; then

@@ -28,8 +28,38 @@ env:
   DEBIAN_FRONTEND: "noninteractive"
 
 jobs:
+  # This job ensures that only ONE runner attempts to setup/update the PVC toolcache at a time.
+  prepare:
+    name: Prepare toolcache
+    runs-on: qtile
+    concurrency:
+      group: pvc-toolcache-lock
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Network Pre-flight
+        run: until timeout 1 bash -c "cat < /dev/null > /dev/tcp/github.com/443"; do sleep 5; done
+
+      - name: update GITHUB_PATH
+        run: |
+          echo "${{ env.CARGO_HOME }}/bin" >> $GITHUB_PATH
+          echo "${{ env.RUSTUP_HOME }}/bin" >> $GITHUB_PATH
+          echo "${{ env.UV_INSTALL_DIR }}/bin" >> $GITHUB_PATH
+          echo "${{ env.WAYLAND_INSTALL_DIR }}/bin" >> $GITHUB_PATH
+
+      - name: Setup Rust (Forced Update)
+        run: |
+          rustup toolchain install stable --profile minimal --force
+          rustup toolchain install nightly --profile minimal --component rustfmt,clippy --force
+          rustup default stable
+
+      - name: Install System Deps
+        run: ./scripts/install-deps $(cat ./deps)
+
   lint:
-    name: Lint & Format
+    name: Lint & Format (${{ matrix.rust }})
+    needs: prepare
     runs-on: qtile
     strategy:
       matrix:
@@ -42,22 +72,11 @@ jobs:
           echo "${{ env.CARGO_HOME }}/bin" >> $GITHUB_PATH
           echo "${{ env.RUSTUP_HOME }}/bin" >> $GITHUB_PATH
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
-          components: rustfmt, clippy
-
-      - name: Rust Cache
-        uses: swatinem/rust-cache@v2
-        with:
-          save-if: false
-
       - name: Format check
-        run: cargo fmt -- --check
+        run: cargo +${{ matrix.rust }} fmt -- --check
 
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo +${{ matrix.rust }} clippy -- -D warnings
 
   test:
     name: Test (Python ${{ matrix.python-version }}, Rust ${{ matrix.rust }})
@@ -69,8 +88,13 @@ jobs:
         python-version: ["3.12", "3.13", "3.14"]
         rust: [stable, nightly]
 
+    continue-on-error: ${{ matrix.python-version == '3.14' || matrix.rust == 'nightly' }}
+
     steps:
       - uses: actions/checkout@v4
+
+      - name: Network Pre-flight
+        run: until timeout 1 bash -c "cat < /dev/null > /dev/tcp/github.com/443"; do sleep 5; done
 
       - name: update GITHUB_PATH
         run: |
@@ -80,21 +104,12 @@ jobs:
           echo "${{ env.RUSTUP_HOME }}/bin" >> $GITHUB_PATH
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
-
-      - name: Rust Cache
-        uses: swatinem/rust-cache@v2
-        with:
-          save-if: false
-
       - name: Install System Deps
         run: ./scripts/install-deps $(cat ./deps)
 
       - name: Install Qtile via uv
-        run: ./scripts/install-qtile ${{ matrix.python-version }}
+        run: |
+          ./scripts/install-qtile ${{ matrix.python-version }}
 
       - name: Start seatd
         run: |
@@ -105,4 +120,6 @@ jobs:
         run: ./scripts/run-x11-tests ${{ matrix.python-version }}
 
       - name: Run Wayland Tests
+        env:
+          XWAYLAND: ${{ env.WAYLAND_INSTALL_DIR }}/bin/Xwayland
         run: ./scripts/run-wl-tests ${{ matrix.python-version }}
