@@ -20,13 +20,22 @@ UPSTREAM_URL="https://raw.githubusercontent.com/qtile/qtile/refs/heads/master/sc
 TEMP_SETUP=$(mktemp /tmp/wayland_setup.XXXXXX)
 wget -qO "$TEMP_SETUP" "$UPSTREAM_URL"
 
-# shellcheck disable=SC1091
+# shellcheck disable=SC1090
 source <(grep -E "^[A-Z_]+=[0-9.]+" "$TEMP_SETUP")
 
 ALL_PRESENT=1
 pkg-config --atleast-version="$WAYLAND" wayland-client || ALL_PRESENT=0
 pkg-config --atleast-version="$WLROOTS" "wlroots-$(echo "$WLROOTS" | cut -d. -f1,2)" || ALL_PRESENT=0
-command -v Xwayland &>/dev/null || ALL_PRESENT=0
+
+# Check for Xwayland in either /usr/bin or our PVC
+if [ -f "/usr/bin/Xwayland" ]; then
+    echo "Xwayland found in /usr/bin"
+elif [ -f "$INSTALL_DIR/bin/Xwayland" ]; then
+    echo "Xwayland found in PVC, creating symlink..."
+    sudo ln -sf "$INSTALL_DIR/bin/Xwayland" /usr/bin/Xwayland
+else
+    ALL_PRESENT=0
+fi
 
 if [ "$ALL_PRESENT" -eq 1 ]; then
     echo "All foundation dependencies satisfied in $INSTALL_DIR. skipping lock and build."
@@ -43,17 +52,28 @@ cleanup() {
 }
 trap cleanup EXIT
 
-WAIT_TIME=5
-while ! mkdir "$LOCK_DIR" 2>/dev/null; do
-    # Check if lock is stale (older than 30 mins)
-    if [ -d "$LOCK_DIR" ] && [ "$(( $(date +%s) - $(stat -c %Y "$LOCK_DIR") ))" -gt 1800 ]; then
-        echo "Removing stale lock $LOCK_DIR"
-        rm -rf "$LOCK_DIR"
-        continue
-    fi
-    echo "Waiting for global install lock ($LOCK_DIR)..."
-    sleep $(( (RANDOM % 10) + 5 ))
-done
+acquire_lock() {
+    local start_time
+    start_time=$(date +%s)
+
+    while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+        # Check if lock is stale (older than 30 mins)
+        if [ -d "$LOCK_DIR" ] && [ "$(( $(date +%s) - $(stat -c %Y "$LOCK_DIR") ))" -gt 1800 ]; then
+            echo "Removing stale lock $LOCK_DIR"
+            rm -rf "$LOCK_DIR"
+            continue
+        fi
+        echo "Waiting for global install lock ($LOCK_DIR)..."
+        sleep $(( (RANDOM % 10) + 5 ))
+
+        if [ $(($(date +%s) - start_time)) -gt 3600 ]; then
+            echo "Timed out waiting for lock"
+            exit 1
+        fi
+    done
+}
+
+acquire_lock
 
 # 4. Standard OS Updates
 OS_RELEASE=$(grep -oP '(?<=^ID=).+' /etc/os-release | tr -d '"')
@@ -83,3 +103,8 @@ python3 ./scripts/patch_wayland_setup.py "$TEMP_SETUP" "$PATCHED_SETUP"
 
 bash "$PATCHED_SETUP"
 rm -f "$PATCHED_SETUP"
+
+# Final Xwayland check and symlink
+if [ -f "$INSTALL_DIR/bin/Xwayland" ] && [ ! -f "/usr/bin/Xwayland" ]; then
+    sudo ln -sf "$INSTALL_DIR/bin/Xwayland" /usr/bin/Xwayland
+fi
