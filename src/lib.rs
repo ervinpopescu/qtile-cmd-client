@@ -1,6 +1,7 @@
-//! I've written this qtile client in order to learn some more Rust (get used to [`serde`], [`clap`] and
-//! other crates) and to get faster responses than when I used `qtile cmd-obj` and other such
-//! commands (which were most likely slower because of the underlying Python bonanza).
+//! High-performance Rust client for Qtile's IPC.
+//!
+//! Designed as a fast alternative to the standard Python `cmd-obj` tool,
+//! leveraging Unix domain sockets and Rust's efficient serialization.
 #![warn(dead_code, unused_variables, unreachable_code, unused_imports)]
 
 #[cfg(test)]

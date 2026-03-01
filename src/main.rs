@@ -5,7 +5,8 @@ use clap::Parser;
 pub(crate) mod utils;
 use utils::{
     args::{Args, Commands},
-    client::InteractiveCommandClient,
+    client::{CallResult, InteractiveCommandClient},
+    repl::Repl,
 };
 
 fn main() -> anyhow::Result<()> {
@@ -20,13 +21,31 @@ fn main() -> anyhow::Result<()> {
             function,
             args,
             info,
+            json,
         } => {
             let result = InteractiveCommandClient::call(object, function, args, info);
             match result {
-                Ok(result) => println!("{result:#}"),
+                Ok(CallResult::Value(val)) => {
+                    if json {
+                        println!("{}", serde_json::to_string(&val)?);
+                    } else {
+                        println!("{val:#}");
+                    }
+                }
+                Ok(CallResult::Text(text)) => {
+                    if json {
+                        println!("{}", serde_json::to_string(&text)?);
+                    } else {
+                        println!("{text}");
+                    }
+                }
                 Err(err) => bail!("{err}"),
             };
             Ok(())
+        }
+        Commands::Repl => {
+            let mut repl = Repl::new();
+            repl.run()
         }
     }
 }
