@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     sudo \
     python3 \
+    pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Rust
