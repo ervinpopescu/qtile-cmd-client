@@ -33,7 +33,7 @@ timeout 30 bash -c 'while ! (qtile cmd-obj -f qtile_info &>/dev/null); do sleep 
 }
 
 # Run tests
-cargo test --lib -q -- --nocapture --show-output --test-threads "$(nproc)" || {
+cargo test --lib -q -- --nocapture --show-output --include-ignored --test-threads "$(nproc)" || {
   echo "--- QTILE LOG ON TEST FAILURE ---"
   cat "$logfile"
   echo "--- QTILE STDOUT/STDERR ON TEST FAILURE ---"

@@ -7,6 +7,9 @@ pub struct Args {
     #[command(subcommand)]
     /// Available CLI commands
     pub command: Commands,
+    #[arg(long, global = true)]
+    /// Use the new framing protocol (length-prefixed messages).
+    pub framed: bool,
 }
 /// Available CLI commands
 #[derive(Subcommand, Debug, Clone)]
