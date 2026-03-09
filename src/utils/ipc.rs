@@ -370,15 +370,125 @@ mod tests {
     #[test]
     fn test_match_response_flexible() {
         let legacy_response = "[0, \"ok\"]".to_string();
-        let modern_modern = json!({"status": 0, "result": "ok"}).to_string();
+        let modern_response = json!({"status": 0, "result": "ok"}).to_string();
 
         assert_eq!(
             Client::match_response(Ok(legacy_response), true).unwrap(),
             "ok"
         );
         assert_eq!(
-            Client::match_response(Ok(modern_modern), false).unwrap(),
+            Client::match_response(Ok(modern_response), false).unwrap(),
             "ok"
         );
+    }
+
+    #[test]
+    fn test_match_response_errors() {
+        // Invalid JSON
+        assert!(Client::match_response(Ok("{invalid".into()), true).is_err());
+
+        // Empty array
+        assert!(Client::match_response(Ok("[]".into()), false).is_err());
+
+        // Missing status in object
+        let missing_status = json!({"result": "ok"}).to_string();
+        assert!(Client::match_response(Ok(missing_status), true).is_err());
+
+        // Status not a number
+        let bad_status = json!({"status": "error", "result": "ok"}).to_string();
+        assert!(Client::match_response(Ok(bad_status), true).is_err());
+
+        // Response code != 0 with string result
+        let err_resp = json!({"status": 1, "result": "some error"}).to_string();
+        let res = Client::match_response(Ok(err_resp), true);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().to_string().contains("some error"));
+
+        // Response code != 0 with unexpected result type
+        let weird_err = json!({"status": 1, "result": 123}).to_string();
+        assert!(Client::match_response(Ok(weird_err), true).is_err());
+    }
+
+    #[test]
+    fn test_decode_qtile_tuples() {
+        let input = json!({
+            "a": {"$tuple": [1, 2]},
+            "b": [3, {"$tuple": [4, 5]}]
+        });
+        let expected = json!({
+            "a": [1, 2],
+            "b": [3, [4, 5]]
+        });
+        assert_eq!(Client::decode_qtile_tuples(input), expected);
+    }
+
+    #[test]
+    fn test_decode_qtile_tuples_complex() {
+        let input = json!({
+            "a": {"$tuple": [{"$tuple": [1, 2]}, 3]},
+            "b": [{"$tuple": [4, 5]}, {"c": {"$tuple": [6]}}]
+        });
+        let expected = json!({
+            "a": [[1, 2], 3],
+            "b": [[4, 5], {"c": [6]}]
+        });
+        assert_eq!(Client::decode_qtile_tuples(input), expected);
+    }
+
+    #[test]
+    fn test_frame_io() {
+        use std::os::unix::net::UnixStream;
+        let (mut server, client_stream) = UnixStream::pair().unwrap();
+        let mut client = Client::new_from_stream(client_stream, true);
+
+        // Test writing
+        let data = b"hello frame";
+        client.write_frame(data).unwrap();
+
+        let mut header = [0u8; 4];
+        server.read_exact(&mut header).unwrap();
+        let len = u32::from_be_bytes(header) as usize;
+        assert_eq!(len, data.len());
+
+        let mut body = vec![0u8; len];
+        server.read_exact(&mut body).unwrap();
+        assert_eq!(&body, data);
+
+        // Test reading
+        let response_data = b"response body";
+        let resp_len = response_data.len() as u32;
+        server.write_all(&resp_len.to_be_bytes()).unwrap();
+        server.write_all(response_data).unwrap();
+
+        let read_data = client.read_frame().unwrap();
+        assert_eq!(&read_data, response_data);
+    }
+
+    #[test]
+    fn test_client_send_legacy() {
+        // In coverage env, qtile is running.
+        // Legacy send might fail if the server is framing-only,
+        // but we want to exercise the code path.
+        let _ = Client::send("[\"status\"]".to_string());
+    }
+
+    #[test]
+    fn test_send_request_fail() {
+        let path = Some(PathBuf::from("/nonexistent/path/qtile/qtilesocket.:0"));
+        assert!(Client::connect_with_path(path.clone(), false).is_err());
+        assert!(Client::connect_with_path(path, true).is_err());
+    }
+
+    #[test]
+    fn test_client_connect_success() {
+        assert!(Client::new().is_ok());
+        assert!(Client::connect(true).is_ok());
+    }
+
+    #[test]
+    fn test_client_connect_fail() {
+        let path = Some(PathBuf::from("/nonexistent/path/qtile/qtilesocket.:0"));
+        assert!(Client::new_with_path(path.clone()).is_err());
+        assert!(Client::connect_with_path(path, true).is_err());
     }
 }

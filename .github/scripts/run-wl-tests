@@ -2,6 +2,12 @@
 
 set -e
 
+# Run checks before tests
+cargo fmt -- --check
+cargo check
+cargo build
+cargo clippy -- -D warnings
+
 export LC_TYPE=en_US.UTF-8
 export XDG_RUNTIME_DIR=/tmp
 export WLR_BACKENDS=headless
@@ -10,6 +16,7 @@ export WLR_LIBINPUT_NO_DEVICES=1
 export WLR_RENDERER_ALLOW_SOFTWARE=1
 export WLR_RENDERER=pixman
 export logfile=qtile-py"$1".log
+export WAYLAND_DISPLAY=wayland-0
 
 # Set up cache for socket in a writable location
 export XDG_CACHE_HOME="/tmp/qtile-test-cache-$$"

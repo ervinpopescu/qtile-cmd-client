@@ -284,6 +284,7 @@ impl CommandParser {
 
                                 match arg1_parsed {
                                     NumberOrString::Uint(index) => {
+                                        // Attempt numeric index resolution first
                                         let obj_type = ObjectType::with_number(&name, index);
                                         match obj_type {
                                             Ok(o) => {
@@ -291,9 +292,7 @@ impl CommandParser {
                                                     ObjectType::Layout(i)
                                                     | ObjectType::Screen(i)
                                                     | ObjectType::Window(i) => i,
-                                                    _ => bail!(
-                                                        "Object {name} does not accept numeric index"
-                                                    ),
+                                                    _ => None,
                                                 };
                                                 parsed_next = true;
                                                 selectors.push(vec![
@@ -303,8 +302,18 @@ impl CommandParser {
                                                 ]);
                                             }
                                             Err(_) => {
-                                                selectors
-                                                    .push(vec![Value::String(name), Value::Null]);
+                                                // Fallback to string if number is not supported (e.g. group "1")
+                                                if ObjectType::with_string(&name, index.to_string())
+                                                    .is_ok()
+                                                {
+                                                    parsed_next = true;
+                                                    selectors.push(vec![
+                                                        Value::String(name),
+                                                        Value::String(index.to_string()),
+                                                    ]);
+                                                } else {
+                                                    bail!("Object {name} does not take a numeric index");
+                                                }
                                             }
                                         }
                                     }
@@ -320,8 +329,10 @@ impl CommandParser {
                                                 ]);
                                             }
                                             Err(_) => {
-                                                selectors
-                                                    .push(vec![Value::String(name), Value::Null]);
+                                                selectors.push(vec![
+                                                    Value::String(name.clone()),
+                                                    Value::Null,
+                                                ]);
                                             }
                                         }
                                     }
@@ -339,5 +350,172 @@ impl CommandParser {
             }
         }
         Ok(selectors)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_number_or_string_from_str() {
+        assert_eq!(
+            NumberOrString::from_str("123").unwrap(),
+            NumberOrString::Uint(123)
+        );
+        assert_eq!(
+            NumberOrString::from_str("abc").unwrap(),
+            NumberOrString::String("abc".to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_object_simple() {
+        let obj = vec!["group".to_string()];
+        let selectors = CommandParser::get_object(obj).unwrap();
+        assert_eq!(
+            selectors,
+            vec![vec![Value::String("group".into()), Value::Null]]
+        );
+    }
+
+    #[test]
+    fn test_get_object_with_selector() {
+        let obj = vec!["group".to_string(), "1".to_string()];
+        let selectors = CommandParser::get_object(obj).unwrap();
+        assert_eq!(
+            selectors,
+            vec![vec![
+                Value::String("group".into()),
+                Value::String("1".into())
+            ]]
+        );
+    }
+
+    #[test]
+    fn test_get_object_with_index() {
+        let obj = vec!["screen".to_string(), "0".to_string()];
+        let selectors = CommandParser::get_object(obj).unwrap();
+        assert_eq!(
+            selectors,
+            vec![vec![
+                Value::String("screen".into()),
+                Value::Number(0.into())
+            ]]
+        );
+    }
+
+    #[test]
+    fn test_get_object_root() {
+        let obj = vec!["root".to_string(), "layout".to_string()];
+        let selectors = CommandParser::get_object(obj).unwrap();
+        assert_eq!(
+            selectors,
+            vec![vec![Value::String("layout".into()), Value::Null]]
+        );
+    }
+
+    #[test]
+    fn test_get_object_invalid() {
+        let obj = vec!["nonexistent".to_string()];
+        assert!(CommandParser::get_object(obj).is_err());
+    }
+
+    #[test]
+    fn test_get_object_complex_selector() {
+        // Test bar with a string name that looks like a number
+        let obj = vec!["bar".to_string(), "1".to_string()];
+        let selectors = CommandParser::get_object(obj).unwrap();
+        assert_eq!(
+            selectors,
+            vec![vec![Value::String("bar".into()), Value::String("1".into())]]
+        );
+    }
+
+    #[test]
+    fn test_get_object_multi_level() {
+        let obj = vec![
+            "group".to_string(),
+            "1".to_string(),
+            "window".to_string(),
+            "123".to_string(),
+        ];
+        let selectors = CommandParser::get_object(obj).unwrap();
+        assert_eq!(
+            selectors,
+            vec![
+                vec![Value::String("group".into()), Value::String("1".into())],
+                vec![Value::String("window".into()), Value::Number(123.into())],
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_docstring() {
+        let doc = "cmd(arg1, arg2)\nThis is a test command.";
+        let parsed = CommandParser::parse_docstring(doc, true, false).unwrap();
+        assert_eq!(parsed, "(arg1, arg2) This is a test command.");
+
+        let parsed_no_args = CommandParser::parse_docstring(doc, false, false).unwrap();
+        assert_eq!(parsed_no_args, " This is a test command.");
+
+        let parsed_short = CommandParser::parse_docstring(doc, true, true).unwrap();
+        assert_eq!(parsed_short, "* This is a test command.");
+    }
+
+    #[test]
+    fn test_parse_docstring_errors() {
+        assert!(CommandParser::parse_docstring("no parens", true, false).is_err());
+        assert!(CommandParser::parse_docstring("missing end (", true, false).is_err());
+    }
+
+    #[test]
+    fn test_get_object_errors() {
+        // Number at start
+        assert!(CommandParser::get_object(vec!["1".into()]).is_err());
+        // Unknown object name
+        assert!(CommandParser::get_object(vec!["unknown".into()]).is_err());
+        // Object that doesn't take index
+        assert!(CommandParser::get_object(vec!["core".into(), "1".into()]).is_err());
+    }
+
+    #[test]
+    fn test_command_parser_from_params() {
+        // Execute action
+        let action = CommandParser::from_params(
+            Some(vec!["group".into()]),
+            Some("info".into()),
+            None,
+            false,
+            true, // use framing for coverage env
+        )
+        .unwrap();
+        if let CommandAction::Execute(p) = action {
+            assert_eq!(p.command, "info");
+            assert_eq!(p.selectors.len(), 1);
+        } else {
+            panic!("Expected Execute action");
+        }
+
+        // Help action
+        let action_help =
+            CommandParser::from_params(None, Some("help".into()), None, false, true).unwrap();
+        assert!(matches!(action_help, CommandAction::Help(_)));
+
+        // Implicit help (no function)
+        let action_no_func = CommandParser::from_params(None, None, None, false, true).unwrap();
+        assert!(matches!(action_no_func, CommandAction::Help(_)));
+
+        // Info action
+        let action_info =
+            CommandParser::from_params(None, Some("status".into()), None, true, true).unwrap();
+        assert!(matches!(action_info, CommandAction::Help(_)));
+    }
+
+    #[test]
+    fn test_command_parser_get_help() {
+        // In the coverage env, qtile is running, so this should succeed.
+        let res = CommandParser::get_help(&[], None, true);
+        assert!(res.is_ok());
     }
 }
