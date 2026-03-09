@@ -92,7 +92,7 @@ impl CommandQuery {
 
 /// Client for executing commands against a running Qtile instance.
 pub struct QtileClient {
-    framed: bool,
+    pub(crate) framed: bool,
 }
 
 impl QtileClient {
@@ -102,7 +102,6 @@ impl QtileClient {
     }
 
     /// Returns the framing protocol setting for this client.
-    #[allow(dead_code)]
     pub fn framed(&self) -> bool {
         self.framed
     }
@@ -134,5 +133,51 @@ impl QtileClient {
     #[allow(dead_code)]
     pub fn call_root<S: Into<String>>(&self, function: S) -> anyhow::Result<CallResult> {
         self.call(CommandQuery::new().function(function.into()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_command_query_builder() {
+        let query = CommandQuery::new()
+            .object(vec!["group".to_string(), "1".to_string()])
+            .function("info".to_string())
+            .args(vec!["short".to_string()])
+            .info(true);
+
+        assert_eq!(
+            query.object,
+            Some(vec!["group".to_string(), "1".to_string()])
+        );
+        assert_eq!(query.function, Some("info".to_string()));
+        assert_eq!(query.args, Some(vec!["short".to_string()]));
+        assert!(query.info);
+    }
+
+    #[test]
+    fn test_call_result_helpers() {
+        let val_res = CallResult::Value(json!({"status": "ok"}));
+        assert_eq!(val_res.as_value(), Some(&json!({"status": "ok"})));
+        assert_eq!(val_res.as_str(), None);
+        assert_eq!(val_res.to_json(), json!({"status": "ok"}));
+
+        let text_res = CallResult::Text("help text".to_string());
+        assert_eq!(text_res.as_value(), None);
+        assert_eq!(text_res.as_str(), Some("help text"));
+        assert_eq!(text_res.to_json(), Value::String("help text".to_string()));
+    }
+
+    #[test]
+    fn test_call_result_display() {
+        let val_res = CallResult::Value(json!({"a": 1}));
+        // Pretty print adds newlines and indentation
+        assert!(format!("{}", val_res).contains("\"a\": 1"));
+
+        let text_res = CallResult::Text("plain text".to_string());
+        assert_eq!(format!("{}", text_res), "plain text");
     }
 }
