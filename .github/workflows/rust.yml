@@ -2,10 +2,9 @@ name: Rust CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
-  workflow_dispatch:
+    branches: ["main"]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
@@ -33,7 +32,7 @@ jobs:
     name: Prepare toolcache
     runs-on: qtile
     concurrency:
-      group: pvc-toolcache-lock
+      group: pvc-toolcache-lock-${{ github.head_ref || github.ref }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
@@ -75,6 +74,9 @@ jobs:
       - name: Format check
         run: cargo +${{ matrix.rust }} fmt -- --check
 
+      - name: Cargo check
+        run: cargo +${{ matrix.rust }} check
+
       - name: Clippy
         run: cargo +${{ matrix.rust }} clippy -- -D warnings
 
@@ -109,7 +111,7 @@ jobs:
 
       - name: Install Qtile via uv
         run: |
-          ./.github/scripts/install-qtile ${{ matrix.python-version }}
+          ./.github/scripts/install-qtile ${{ matrix.python-version }} https://github.com/qtile/qtile master
 
       - name: Start seatd
         run: |
@@ -123,3 +125,46 @@ jobs:
         env:
           XWAYLAND: ${{ env.WAYLAND_INSTALL_DIR }}/bin/Xwayland
         run: ./.github/scripts/run-wl-tests ${{ matrix.python-version }}
+
+  coverage:
+    name: Coverage
+    needs: test
+    runs-on: qtile
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Network Pre-flight
+        run: until timeout 1 bash -c "cat < /dev/null > /dev/tcp/github.com/443"; do sleep 5; done
+
+      - name: update GITHUB_PATH
+        run: |
+          echo "${{ env.WAYLAND_INSTALL_DIR }}/bin" >> $GITHUB_PATH
+          echo "${{ env.UV_INSTALL_DIR }}/bin" >> $GITHUB_PATH
+          echo "${{ env.CARGO_HOME }}/bin" >> $GITHUB_PATH
+          echo "${{ env.RUSTUP_HOME }}/bin" >> $GITHUB_PATH
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install System Deps
+        run: ./.github/scripts/install-deps $(cat ./deps)
+
+      - name: Install Qtile via uv
+        run: ./.github/scripts/install-qtile 3.12 https://github.com/qtile/qtile master
+
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin --locked
+
+      - name: Start seatd
+        run: |
+          sudo seatd -g video &
+          sleep 1
+
+      - name: Generate coverage
+        run: ./.github/scripts/run-coverage
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: target/tarpaulin/cobertura.xml
+          fail_ci_if_error: false

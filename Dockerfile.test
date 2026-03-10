@@ -31,11 +31,16 @@ COPY . .
 
 # Install system dependencies using the shared script
 # This ensures consistency between Docker and Host
-RUN ./scripts/install-deps $(cat deps)
+RUN ./.github/scripts/install-deps $(cat deps)
+
+# Install cargo-tarpaulin for coverage
+RUN cargo install cargo-tarpaulin
 
 # Install Qtile
 ARG PYTHON_VERSION=3.12
-RUN ./scripts/install-qtile ${PYTHON_VERSION}
+ARG QTILE_REPO=https://github.com/qtile/qtile
+ARG QTILE_BRANCH=master
+RUN ./.github/scripts/install-qtile ${PYTHON_VERSION} ${QTILE_REPO} ${QTILE_BRANCH}
 
 # Default command: run tests
-CMD ["./scripts/run-x11-tests", "3.12"]
+CMD ["./.github/scripts/run-x11-tests", "3.12"]

@@ -2,16 +2,21 @@
 
 set -ex
 
+# Use the provided python version or default to 3.12
+PYTHON_VERSION="${1:-3.12}"
+# Use provided qtile repo or default to upstream
+QTILE_REPO="${2:-https://github.com/qtile/qtile}"
+# Use provided qtile branch or default to master
+QTILE_BRANCH="${3:-master}"
+
 # Clean up any existing source to ensure a fresh build
 rm -rf qtile-source
 
 # Clone qtile
-git clone https://github.com/qtile/qtile qtile-source
+git clone --branch "$QTILE_BRANCH" "$QTILE_REPO" qtile-source
 cd qtile-source
 
 export UV_HTTP_TIMEOUT=300
-# Use the provided python version or default to 3.12
-PYTHON_VERSION="${1:-3.12}"
 
 # Sync and build
 uv sync --python="$PYTHON_VERSION" --all-extras
