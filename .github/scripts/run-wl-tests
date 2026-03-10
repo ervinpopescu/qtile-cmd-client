@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -x
+set -e
 
 export LC_TYPE=en_US.UTF-8
 export XDG_RUNTIME_DIR=/tmp
@@ -10,15 +10,35 @@ export WLR_LIBINPUT_NO_DEVICES=1
 export WLR_RENDERER_ALLOW_SOFTWARE=1
 export WLR_RENDERER=pixman
 export logfile=qtile-py"$1".log
-qtile start -b wayland -p "$logfile" &
 
-echo "while ! (qtile cmd-obj -f qtile_info &>/dev/null); do echo socket not responsive yet; sleep 1; done" >wait_for_socket.sh
-timeout 30 bash wait_for_socket.sh
-[[ $? -eq 124 ]] && echo "could not connect to socket, qtile is not running" && ls "$logfile" && tail "$logfile" && exit 1
+# Set up cache for socket in a writable location
+export XDG_CACHE_HOME="/tmp/qtile-test-cache-$$"
+mkdir -p "$XDG_CACHE_HOME/qtile"
 
-qtile cmd-obj -f qtile_info
-cargo test --lib -q -- --nocapture || export FAIL=1
+cleanup() {
+    echo "Cleaning up processes..."
+    pkill -u "$USER" -9 qtile || true
+    rm -rf "$XDG_CACHE_HOME"
+}
+trap cleanup EXIT
 
-pkill -9 qtile
+# Start qtile and capture stderr
+qtile start -b wayland -p "$logfile" &> qtile_stderr.log &
+
+# Wait for socket
+timeout 30 bash -c 'while ! (qtile cmd-obj -f qtile_info &>/dev/null); do sleep 0.5; done' || {
+    echo "Qtile failed to start or socket not found"
+    cat qtile_stderr.log
+    exit 1
+}
+
+# Run tests
+cargo test --lib -q -- --nocapture --show-output --test-threads "$(nproc)" || {
+    echo "--- QTILE LOG ON TEST FAILURE ---"
+    cat "$logfile"
+    echo "--- QTILE STDOUT/STDERR ON TEST FAILURE ---"
+    cat qtile_stderr.log
+    export FAIL=1
+}
+
 if [[ $FAIL -eq 1 ]]; then exit 1; fi
-# deactivate

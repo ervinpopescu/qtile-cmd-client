@@ -2,6 +2,7 @@
 
 set -e
 
+# Set up Xvfb for Qtile
 export DISPLAY=:99
 sudo Xvfb -ac $DISPLAY -screen 0 1280x1024x24 &>/dev/null &
 
@@ -17,7 +18,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-export logfile=qtile-py"$1".log
+export logfile=qtile-py-coverage.log
+
+# Ensure binary is built for integration tests
+cargo build
 
 # Start qtile and capture stderr
 qtile start -p "$logfile" &> qtile_stderr.log &
@@ -25,17 +29,12 @@ qtile start -p "$logfile" &> qtile_stderr.log &
 # Wait for socket
 timeout 30 bash -c "while ! [ -S \"\$XDG_CACHE_HOME/qtile/qtilesocket.\$DISPLAY\" ]; do sleep 0.5; done" || {
     echo "Qtile failed to start or socket not found"
-    cat qtile_stderr.log
     exit 1
 }
 
-# Run tests
-cargo test --lib -q -- --nocapture --show-output --test-threads "$(nproc)" || {
-    echo "--- QTILE LOG ON TEST FAILURE ---"
-    cat "$logfile"
-    echo "--- QTILE STDOUT/STDERR ON TEST FAILURE ---"
-    cat qtile_stderr.log
-    export FAIL=1
-}
+# Run tarpaulin with Lcov, HTML, and XML (Cobertura) output for Codecov
+cargo tarpaulin --out Lcov --out Html --out xml --output-dir target/tarpaulin -- --test-threads 1
 
-if [[ $FAIL -eq 1 ]]; then exit 1; fi
+FAIL=$?
+
+if [[ $FAIL -ne 0 ]]; then exit $FAIL; fi
