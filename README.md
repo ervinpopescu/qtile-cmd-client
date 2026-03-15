@@ -81,6 +81,10 @@ qticc cmd-obj [-o <object_path>] [-f <function>] [-a <args...>] [--info] [--fram
 
 Use `--framed` to support the new length-prefixed IPC protocol (Qtile PR #5835).
 
+## Coverage graph
+
+[![codecov graph](https://codecov.io/github/ervinpopescu/qtile-cmd-client/graphs/icicle.svg?token=AZWI2H69RP)](https://codecov.io/github/ervinpopescu/qtile-cmd-client)
+
 ## License
 
 GNU GENERAL PUBLIC LICENSE Version 3
