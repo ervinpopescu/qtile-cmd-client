@@ -32,7 +32,7 @@ jobs:
     name: Prepare toolcache
     runs-on: qtile
     concurrency:
-      group: pvc-toolcache-lock-${{ github.head_ref || github.ref }}
+      group: pvc-toolcache-lock
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
@@ -60,6 +60,10 @@ jobs:
     name: Lint & Format (${{ matrix.rust }})
     needs: prepare
     runs-on: qtile
+    # for different PR's cargo check to not step on each other's toes
+    concurrency:
+      group: ${{ matrix.rust }}-toolchain-lint-and-format-lock
+      cancel-in-progress: false
     strategy:
       matrix:
         rust: [stable, nightly]
@@ -89,9 +93,6 @@ jobs:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
         rust: [stable, nightly]
-
-    continue-on-error: ${{ matrix.python-version == '3.14' || matrix.rust == 'nightly' }}
-
     steps:
       - uses: actions/checkout@v4
 

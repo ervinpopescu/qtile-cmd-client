@@ -10,32 +10,32 @@ export XDG_CACHE_HOME="/tmp/qtile-test-cache-$$"
 mkdir -p "$XDG_CACHE_HOME/qtile"
 
 cleanup() {
-    echo "Cleaning up processes..."
-    pkill -u "$USER" -9 qtile || true
-    sudo pkill -9 -f "Xvfb $DISPLAY" || true
-    rm -rf "$XDG_CACHE_HOME"
+  echo "Cleaning up processes..."
+  pkill -9 qtile || true
+  sudo pkill -9 -f "Xvfb $DISPLAY" || true
+  rm -rf "$XDG_CACHE_HOME"
 }
 trap cleanup EXIT
 
 export logfile=qtile-py"$1".log
 
 # Start qtile and capture stderr
-qtile start -p "$logfile" &> qtile_stderr.log &
+qtile start -p "$logfile" &>qtile_stderr.log &
 
 # Wait for socket
 timeout 30 bash -c "while ! [ -S \"\$XDG_CACHE_HOME/qtile/qtilesocket.\$DISPLAY\" ]; do sleep 0.5; done" || {
-    echo "Qtile failed to start or socket not found"
-    cat qtile_stderr.log
-    exit 1
+  echo "Qtile failed to start or socket not found"
+  cat qtile_stderr.log
+  exit 1
 }
 
 # Run tests
 cargo test --lib -q -- --nocapture --show-output --test-threads "$(nproc)" || {
-    echo "--- QTILE LOG ON TEST FAILURE ---"
-    cat "$logfile"
-    echo "--- QTILE STDOUT/STDERR ON TEST FAILURE ---"
-    cat qtile_stderr.log
-    export FAIL=1
+  echo "--- QTILE LOG ON TEST FAILURE ---"
+  cat "$logfile"
+  echo "--- QTILE STDOUT/STDERR ON TEST FAILURE ---"
+  cat qtile_stderr.log
+  export FAIL=1
 }
 
 if [[ $FAIL -eq 1 ]]; then exit 1; fi
