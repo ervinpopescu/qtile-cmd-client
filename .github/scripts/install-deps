@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -ex
+set -e
 
 # 1. Environment Setup
 CACHE_DIR="${AGENT_TOOLSDIRECTORY:-/tmp}/qtile-deps"
@@ -29,48 +29,48 @@ pkg-config --atleast-version="$WLROOTS" "wlroots-$(echo "$WLROOTS" | cut -d. -f1
 
 # Check for Xwayland in either /usr/bin or our PVC
 if [ -f "/usr/bin/Xwayland" ]; then
-    echo "Xwayland found in /usr/bin"
+  echo "Xwayland found in /usr/bin"
 elif [ -f "$INSTALL_DIR/bin/Xwayland" ]; then
-    echo "Xwayland found in PVC, creating symlink..."
-    sudo ln -sf "$INSTALL_DIR/bin/Xwayland" /usr/bin/Xwayland
+  echo "Xwayland found in PVC, creating symlink..."
+  sudo ln -sf "$INSTALL_DIR/bin/Xwayland" /usr/bin/Xwayland
 else
-    ALL_PRESENT=0
+  ALL_PRESENT=0
 fi
 
 if [ "$ALL_PRESENT" -eq 1 ]; then
-    echo "All foundation dependencies satisfied in $INSTALL_DIR. skipping lock and build."
-    rm -f "$TEMP_SETUP"
-    exit 0
+  echo "All foundation dependencies satisfied in $INSTALL_DIR. skipping lock and build."
+  rm -f "$TEMP_SETUP"
+  exit 0
 fi
 
 # 3. Acquire Atomic Lock (Only if we actually need to build)
 LOCK_DIR="$WAYLAND_CACHE/global_install.lock"
 
 cleanup() {
-    rm -rf "$LOCK_DIR"
-    rm -f "$TEMP_SETUP"
+  rm -rf "$LOCK_DIR"
+  rm -f "$TEMP_SETUP"
 }
 trap cleanup EXIT
 
 acquire_lock() {
-    local start_time
-    start_time=$(date +%s)
+  local start_time
+  start_time=$(date +%s)
 
-    while ! mkdir "$LOCK_DIR" 2>/dev/null; do
-        # Check if lock is stale (older than 30 mins)
-        if [ -d "$LOCK_DIR" ] && [ "$(( $(date +%s) - $(stat -c %Y "$LOCK_DIR") ))" -gt 1800 ]; then
-            echo "Removing stale lock $LOCK_DIR"
-            rm -rf "$LOCK_DIR"
-            continue
-        fi
-        echo "Waiting for global install lock ($LOCK_DIR)..."
-        sleep $(( (RANDOM % 10) + 5 ))
+  while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+    # Check if lock is stale (older than 30 mins)
+    if [ -d "$LOCK_DIR" ] && [ "$(($(date +%s) - $(stat -c %Y "$LOCK_DIR")))" -gt 1800 ]; then
+      echo "Removing stale lock $LOCK_DIR"
+      rm -rf "$LOCK_DIR"
+      continue
+    fi
+    echo "Waiting for global install lock ($LOCK_DIR)..."
+    sleep $(((RANDOM % 10) + 5))
 
-        if [ $(($(date +%s) - start_time)) -gt 3600 ]; then
-            echo "Timed out waiting for lock"
-            exit 1
-        fi
-    done
+    if [ $(($(date +%s) - start_time)) -gt 3600 ]; then
+      echo "Timed out waiting for lock"
+      exit 1
+    fi
+  done
 }
 
 acquire_lock
@@ -106,5 +106,5 @@ rm -f "$PATCHED_SETUP"
 
 # Final Xwayland check and symlink
 if [ -f "$INSTALL_DIR/bin/Xwayland" ] && [ ! -f "/usr/bin/Xwayland" ]; then
-    sudo ln -sf "$INSTALL_DIR/bin/Xwayland" /usr/bin/Xwayland
+  sudo ln -sf "$INSTALL_DIR/bin/Xwayland" /usr/bin/Xwayland
 fi
