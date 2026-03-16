@@ -11,16 +11,16 @@ use shellexpand::tilde;
 
 static SOCKFILE: OnceLock<PathBuf> = OnceLock::new();
 
-/// Returns the cached or newly discovered path to the Qtile IPC socket.
+/// Returns the cached or newly discovered path to the Qtile IPC socket file.
 fn get_sockfile() -> &'static Path {
     SOCKFILE.get_or_init(|| find_sockfile(None))
 }
 
 /// Discovers the Qtile socket file path by checking the following in order:
-/// 1.  An explicitly provided display name.
-/// 2.  `WAYLAND_DISPLAY` environment variable.
-/// 3.  `DISPLAY` environment variable.
-/// 4.  Default locations for Wayland (`wayland-0`) and X11 (`:0`).
+/// 1. An explicitly provided display name.
+/// 2. `WAYLAND_DISPLAY` environment variable.
+/// 3. `DISPLAY` environment variable.
+/// 4. Default locations: Wayland (`wayland-0`), X11 (`:0`, `:99`).
 fn find_sockfile(display: Option<String>) -> PathBuf {
     let xdg_cache_home = std::env::var("XDG_CACHE_HOME").unwrap_or(tilde("~/.cache").to_string());
     let cache_dir = Path::new(&xdg_cache_home);

@@ -2,7 +2,7 @@ use crate::utils::client::{CallResult, InteractiveCommandClient};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 
-/// An interactive shell for navigating the Qtile command graph and executing functions.
+/// Interactive shell for navigating the Qtile command graph and invoking functions.
 pub struct Repl {
     current_object: Vec<String>,
 }
