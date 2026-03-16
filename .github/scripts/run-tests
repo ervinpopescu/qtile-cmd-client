@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+
+set -e
+
+PYTHON_VERSION="${1:-3.12}"
+
+# Build once up front
+cargo build
+
+# === X11 ===
+export DISPLAY=:99
+sudo Xvfb -ac "$DISPLAY" -screen 0 1280x1024x24 &>/dev/null &
+
+XDG_X11="/tmp/qtile-test-x11-$$"
+mkdir -p "$XDG_X11/qtile"
+
+cleanup_x11() {
+  pkill -9 qtile || true
+  sudo pkill -9 -f "Xvfb $DISPLAY" || true
+  rm -rf "$XDG_X11"
+}
+
+XDG_CACHE_HOME="$XDG_X11" qtile start -p "qtile-x11-$PYTHON_VERSION.log" &>qtile_x11.log &
+
+timeout 10 bash -c "while ! [ -S \"$XDG_X11/qtile/qtilesocket.$DISPLAY\" ]; do sleep 0.2; done" || {
+  echo "Qtile X11 failed to start"
+  cat qtile_x11.log
+  cleanup_x11
+  exit 1
+}
+
+XDG_CACHE_HOME="$XDG_X11" cargo test --lib -q -- --nocapture --show-output --test-threads "$(nproc)" || {
+  echo "--- X11 QTILE LOG ---"
+  cat "qtile-x11-$PYTHON_VERSION.log"
+  cat qtile_x11.log
+  cleanup_x11
+  exit 1
+}
+cleanup_x11
+
+# === Wayland ===
+export LC_TYPE=en_US.UTF-8
+export XDG_RUNTIME_DIR=/tmp
+export WLR_BACKENDS=headless
+export WLR_HEADLESS_OUTPUTS=1
+export WLR_LIBINPUT_NO_DEVICES=1
+export WLR_RENDERER_ALLOW_SOFTWARE=1
+export WLR_RENDERER=pixman
+export WAYLAND_DISPLAY=wayland-0
+
+XDG_WL="/tmp/qtile-test-wl-$$"
+mkdir -p "$XDG_WL/qtile"
+
+cleanup_wl() {
+  pkill -9 qtile || true
+  rm -rf "$XDG_WL"
+}
+
+XDG_CACHE_HOME="$XDG_WL" qtile start -b wayland -p "qtile-wl-$PYTHON_VERSION.log" &>qtile_wl.log &
+
+timeout 10 bash -c "while ! [ -S \"$XDG_WL/qtile/qtilesocket.$WAYLAND_DISPLAY\" ]; do sleep 0.2; done" || {
+  echo "Qtile Wayland failed to start"
+  cat qtile_wl.log
+  cleanup_wl
+  exit 1
+}
+
+XDG_CACHE_HOME="$XDG_WL" cargo test --lib -q -- --nocapture --show-output --test-threads "$(nproc)" || {
+  echo "--- WAYLAND QTILE LOG ---"
+  cat "qtile-wl-$PYTHON_VERSION.log"
+  cat qtile_wl.log
+  cleanup_wl
+  exit 1
+}
+cleanup_wl
