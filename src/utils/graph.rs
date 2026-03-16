@@ -4,7 +4,7 @@ pub(crate) static OBJECTS: &[&str] = &[
     "core", "screen", "bar", "widget", "group", "layout", "window", "root",
 ];
 
-/// Basically a Union
+/// Represents a selector value — either a string name or a numeric index.
 #[allow(dead_code)]
 #[derive(Debug, Default)]
 pub enum Selector {

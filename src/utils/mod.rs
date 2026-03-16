@@ -1,4 +1,4 @@
-/// CLI argument parser using [`clap`]
+/// CLI argument definitions using [`clap`]
 pub mod args;
 /// Client structs
 /// - bin: [`ShellClient`](client::ShellClient)
@@ -10,7 +10,7 @@ pub mod client;
 pub mod graph;
 /// Handles communication with the Qtile socket
 pub mod ipc;
-/// CommandParser (from CLI or directly from parameters)
+/// Translates CLI parameters into Qtile IPC JSON payloads
 pub mod parser;
 /// Interactive REPL mode
 pub mod repl;

@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 
-/// Qtile command client
+/// qtile-cmd-client (qticc) — fast Rust replacement for `qtile cmd-obj`
 #[derive(Parser, Debug, Clone)]
 #[command(version, about, long_about = None)]
 pub struct Args {

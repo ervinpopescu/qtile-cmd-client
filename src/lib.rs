@@ -6,5 +6,5 @@
 
 #[cfg(test)]
 pub mod tests;
-/// Utilities for interacting with Qtile
+/// Internal utilities: IPC client, command parser, REPL, and argument types.
 pub mod utils;
