@@ -6,28 +6,29 @@ on:
   pull_request:
     branches: ["main"]
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
+# Global concurrency removed to prevent "Higher Priority" cancellations.
+# Jobs now use unique directories or internal locks.
 
 env:
   CARGO_TERM_COLOR: always
   AGENT_TOOLSDIRECTORY: "/opt/hostedtoolcache"
   RUSTUP_HOME: "/opt/hostedtoolcache/rustup"
   CARGO_HOME: "/opt/hostedtoolcache/cargo"
-  CARGO_TARGET_DIR: "/opt/hostedtoolcache/cargo/target"
+  # Folder isolation: target/pr123 or target/main
+  CARGO_TARGET_DIR: "/opt/hostedtoolcache/cargo/target/${{ github.event.pull_request.number && format('pr{0}', github.event.pull_request.number) || github.ref_name }}"
+
+  # sccache configuration
+  SCCACHE_DIR: "/opt/hostedtoolcache/sccache"
+  SCCACHE_CACHE_SIZE: "15G"
+
+  # Tool paths
   UV_INSTALL_DIR: "/opt/hostedtoolcache/uv"
-  UV_CACHE_DIR: "/opt/hostedtoolcache/uv-cache"
-  UV_PYTHON_INSTALL_DIR: "/opt/hostedtoolcache/uv/python"
-  UV_PYTHON_PREFERENCE: only-managed
-  # PVC Paths for pre-built Wayland dependencies
   WAYLAND_INSTALL_DIR: "/opt/hostedtoolcache/qtile-deps/wayland/install"
   PKG_CONFIG_PATH: "/opt/hostedtoolcache/qtile-deps/wayland/install/lib/pkgconfig:/opt/hostedtoolcache/qtile-deps/wayland/install/share/pkgconfig"
   LD_LIBRARY_PATH: "/opt/hostedtoolcache/qtile-deps/wayland/install/lib"
   DEBIAN_FRONTEND: "noninteractive"
 
 jobs:
-  # This job ensures that only ONE runner attempts to setup/update the PVC toolcache at a time.
   prepare:
     name: Prepare toolcache
     runs-on: qtile
@@ -37,21 +38,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Network Pre-flight
-        run: until timeout 1 bash -c "cat < /dev/null > /dev/tcp/github.com/443"; do sleep 5; done
-
       - name: update GITHUB_PATH
         run: |
           echo "${{ env.CARGO_HOME }}/bin" >> $GITHUB_PATH
           echo "${{ env.RUSTUP_HOME }}/bin" >> $GITHUB_PATH
-          echo "${{ env.UV_INSTALL_DIR }}/bin" >> $GITHUB_PATH
-          echo "${{ env.WAYLAND_INSTALL_DIR }}/bin" >> $GITHUB_PATH
 
-      - name: Setup Rust (Forced Update)
+      - name: Setup Rust & tools
         run: |
-          rustup toolchain install stable --profile minimal --force
-          rustup toolchain install nightly --profile minimal --component rustfmt,clippy --force
+          rustup toolchain install stable nightly --profile minimal --no-self-update
           rustup default stable
+          rustup component add llvm-tools
+          cargo install sccache --locked
+          cargo install cargo-llvm-cov --locked
 
       - name: Install System Deps
         run: ./.github/scripts/install-deps $(cat ./deps)
@@ -60,10 +58,8 @@ jobs:
     name: Lint & Format (${{ matrix.rust }})
     needs: prepare
     runs-on: qtile
-    # for different PR's cargo check to not step on each other's toes
-    concurrency:
-      group: ${{ matrix.rust }}-toolchain-lint-and-format-lock
-      cancel-in-progress: false
+    env:
+      RUSTC_WRAPPER: "sccache"
     strategy:
       matrix:
         rust: [stable, nightly]
@@ -74,6 +70,9 @@ jobs:
         run: |
           echo "${{ env.CARGO_HOME }}/bin" >> $GITHUB_PATH
           echo "${{ env.RUSTUP_HOME }}/bin" >> $GITHUB_PATH
+
+      - name: Start sccache
+        run: sccache --start-server
 
       - name: Format check
         run: cargo +${{ matrix.rust }} fmt -- --check
@@ -84,10 +83,19 @@ jobs:
       - name: Clippy
         run: cargo +${{ matrix.rust }} clippy -- -D warnings
 
+      - name: Finalize sccache
+        if: always() # Ensures it stops even if tests fail
+        run: |
+          sccache --show-stats
+          sccache --stop-server
+
   test:
     name: Test (Python ${{ matrix.python-version }}, Rust ${{ matrix.rust }})
     needs: lint
     runs-on: qtile
+    # NOTE: Lint is slower with sccache (~+10s) — overhead outweighs savings on short check/clippy runs
+    # env:
+    #   RUSTC_WRAPPER: "sccache"
     strategy:
       fail-fast: false
       matrix:
@@ -96,9 +104,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Network Pre-flight
-        run: until timeout 1 bash -c "cat < /dev/null > /dev/tcp/github.com/443"; do sleep 5; done
-
       - name: update GITHUB_PATH
         run: |
           echo "${{ env.WAYLAND_INSTALL_DIR }}/bin" >> $GITHUB_PATH
@@ -107,31 +112,59 @@ jobs:
           echo "${{ env.RUSTUP_HOME }}/bin" >> $GITHUB_PATH
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
+      - name: Start sccache
+        run: sccache --start-server
+
       - name: Install System Deps
         run: ./.github/scripts/install-deps $(cat ./deps)
 
-      - name: Install Qtile via uv
+      - name: Setup Python Dev Environment
         run: |
-          ./.github/scripts/install-qtile ${{ matrix.python-version }} https://github.com/qtile/qtile master
+          # 1. Ensure the specific python version is installed
+          uv python install ${{ matrix.python-version }}
+
+          # 2. Find the path to the python binary
+          PYTHON_BIN=$(uv python find ${{ matrix.python-version }})
+
+          # 3. Get the base directory (parent of the 'bin' folder)
+          PY_DIR=$(dirname $(dirname "$PYTHON_BIN"))
+
+          # 4. Export paths for pkg-config and compiler
+          echo "PKG_CONFIG_PATH=$PY_DIR/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+
+          # 5. Extract the include path using the binary itself
+          PY_INCLUDE=$($PYTHON_BIN -c "import sysconfig; print(sysconfig.get_path('include'))")
+          echo "CFLAGS=-I$PY_INCLUDE" >> $GITHUB_ENV
+
+          # Debug output to verify
+          echo "Using Python at: $PYTHON_BIN"
+          echo "Include path: $PY_INCLUDE"
+
+      - name: Install Qtile via uv
+        run: ./.github/scripts/install-qtile ${{ matrix.python-version }} https://github.com/qtile/qtile master
 
       - name: Start seatd
         run: |
           sudo seatd -g video &
           sleep 1
 
-      - name: Run X11 Tests
-        run: ./.github/scripts/run-x11-tests ${{ matrix.python-version }}
-
-      - name: Run Wayland Tests
+      - name: Run Tests
+        run: ./.github/scripts/run-tests ${{ matrix.python-version }}
         env:
           XWAYLAND: ${{ env.WAYLAND_INSTALL_DIR }}/bin/Xwayland
-        run: ./.github/scripts/run-wl-tests ${{ matrix.python-version }}
+      - name: Finalize sccache
+        if: always() # Ensures it stops even if tests fail
+        run: |
+          sccache --show-stats
+          sccache --stop-server
 
   coverage:
     name: Coverage
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     needs: test
     runs-on: qtile
-    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    env:
+      RUSTC_WRAPPER: "sccache"
     steps:
       - uses: actions/checkout@v4
 
@@ -149,11 +182,17 @@ jobs:
       - name: Install System Deps
         run: ./.github/scripts/install-deps $(cat ./deps)
 
+      - name: Setup Python Dev Environment
+        run: |
+          uv python install 3.12
+          PYTHON_BIN=$(uv python find 3.12)
+          PY_DIR=$(dirname $(dirname "$PYTHON_BIN"))
+          echo "PKG_CONFIG_PATH=$PY_DIR/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+          PY_INCLUDE=$($PYTHON_BIN -c "import sysconfig; print(sysconfig.get_path('include'))")
+          echo "CFLAGS=-I$PY_INCLUDE" >> $GITHUB_ENV
+
       - name: Install Qtile via uv
         run: ./.github/scripts/install-qtile 3.12 https://github.com/qtile/qtile master
-
-      - name: Install cargo-tarpaulin
-        run: cargo install cargo-tarpaulin --locked
 
       - name: Start seatd
         run: |
@@ -167,5 +206,11 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: target/tarpaulin/cobertura.xml
+          files: target/llvm-cov/lcov.info
           fail_ci_if_error: false
+
+      - name: Finalize sccache
+        if: always() # Ensures it stops even if tests fail
+        run: |
+          sccache --show-stats
+          sccache --stop-server

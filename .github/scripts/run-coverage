@@ -20,20 +20,18 @@ trap cleanup EXIT
 
 export logfile=qtile-py-coverage.log
 
-# Ensure binary is built for integration tests
-cargo build
-
 # Start qtile and capture stderr
-qtile start -p "$logfile" &> qtile_stderr.log &
+qtile start -p "$logfile" &>qtile_stderr.log &
 
 # Wait for socket
-timeout 30 bash -c "while ! [ -S \"\$XDG_CACHE_HOME/qtile/qtilesocket.\$DISPLAY\" ]; do sleep 0.5; done" || {
+timeout 10 bash -c "while ! [ -S \"\$XDG_CACHE_HOME/qtile/qtilesocket.\$DISPLAY\" ]; do sleep 0.2; done" || {
     echo "Qtile failed to start or socket not found"
+    cat qtile_stderr.log
     exit 1
 }
 
-# Run tarpaulin with Lcov, HTML, and XML (Cobertura) output for Codecov
-cargo tarpaulin --out Lcov --out Html --out xml --output-dir target/tarpaulin -- --test-threads 1
+# Run coverage with llvm-cov
+cargo llvm-cov --lcov --output-path target/llvm-cov/lcov.info -- --test-threads 1
 
 FAIL=$?
 

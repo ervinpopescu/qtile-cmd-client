@@ -1,0 +1,24 @@
+name: Cleanup Toolcache
+on:
+  schedule:
+    - cron: '0 0 * * 0' # Runs every Sunday at midnight
+  workflow_dispatch: # Allows you to run it manually
+
+jobs:
+  cleanup:
+    runs-on: qtile
+    steps:
+      - name: Prune old cargo target directories
+        run: |
+          TARGET_BASE="/opt/hostedtoolcache/cargo/target"
+          if [ -d "$TARGET_BASE" ]; then
+            echo "Cleaning up directories not accessed in 7 days..."
+            # Using -atime (access time) is safer for "active" builds
+            # Also adding a check to never delete the 'main' folder if you want it persistent
+            find "$TARGET_BASE" -mindepth 1 -maxdepth 1 -type d ! -name "main" -atime +7 -exec rm -rf {} +
+          fi
+
+      - name: Verify sccache integrity
+        run: |
+          # Just a health check to ensure sccache hasn't ballooned past the PVC limit
+          du -sh ${{ env.SCCACHE_DIR }} || echo "sccache dir not found yet."
