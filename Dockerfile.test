@@ -33,6 +33,7 @@ COPY . .
 # This ensures consistency between Docker and Host
 RUN ./.github/scripts/install-deps $(cat deps)
 
+
 # Install cargo-tarpaulin for coverage
 RUN cargo install cargo-tarpaulin
 
