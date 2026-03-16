@@ -31,6 +31,7 @@ timeout 10 bash -c "while ! [ -S \"\$XDG_CACHE_HOME/qtile/qtilesocket.\$DISPLAY\
 }
 
 # Run coverage with llvm-cov
+mkdir -p target/llvm-cov
 cargo llvm-cov --lcov --output-path target/llvm-cov/lcov.info -- --test-threads 1
 
 FAIL=$?
