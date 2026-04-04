@@ -17,7 +17,7 @@ simple_logger = "5.2.0"
 ctor = "*"
 sysinfo = "*"
 shellexpand = { version = "3.1.2", features = ["full", "path"] }
-rustyline = "17.0.2"
+rustyline = "18.0.0"
 
 [[bin]]
 name = "qticc"
