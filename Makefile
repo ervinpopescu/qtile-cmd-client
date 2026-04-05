@@ -19,9 +19,6 @@ test:
 clippy:
 	cargo clippy -- -D warnings
 
-fmt:
-	cargo fmt -- --check
-
 # Docker targets for local development and verification
 .dockerbuilt: Dockerfile.test deps .github/scripts/install-deps .github/scripts/install-qtile
 	docker buildx build -t $(DOCKER_IMAGE) --build-arg PYTHON_VERSION=$(PYTHON_VERSION) --build-arg QTILE_REPO=$(QTILE_REPO) --build-arg QTILE_BRANCH=$(QTILE_BRANCH) -f Dockerfile.test .

@@ -123,3 +123,88 @@ impl ObjectType {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_selector_clone_and_default() {
+        let s = Selector::String("test".into());
+        assert!(matches!(s.clone(), Selector::String(v) if v == "test"));
+
+        let i = Selector::Int(123);
+        assert!(matches!(i.clone(), Selector::Int(123)));
+
+        let d: Selector = Default::default();
+        assert!(matches!(d, Selector::Null));
+    }
+
+    #[test]
+    fn test_object_type_with_string() {
+        assert!(
+            matches!(ObjectType::with_string("bar", "top".to_string()).unwrap(), ObjectType::Bar(Some(s)) if s == "top")
+        );
+        assert!(
+            matches!(ObjectType::with_string("group", "1".to_string()).unwrap(), ObjectType::Group(Some(s)) if s == "1")
+        );
+        assert!(
+            matches!(ObjectType::with_string("widget", "test".to_string()).unwrap(), ObjectType::Widget(Some(s)) if s == "test")
+        );
+        assert!(ObjectType::with_string("invalid", "test".to_string()).is_err());
+    }
+
+    #[test]
+    fn test_object_type_with_number() {
+        assert!(matches!(
+            ObjectType::with_number("screen", 0).unwrap(),
+            ObjectType::Screen(Some(0))
+        ));
+        assert!(matches!(
+            ObjectType::with_number("layout", 1).unwrap(),
+            ObjectType::Layout(Some(1))
+        ));
+        assert!(matches!(
+            ObjectType::with_number("window", 123).unwrap(),
+            ObjectType::Window(Some(123))
+        ));
+        assert!(ObjectType::with_number("invalid", 0).is_err());
+    }
+
+    #[test]
+    fn test_object_type_with_none() {
+        assert!(matches!(
+            ObjectType::with_none("screen").unwrap(),
+            ObjectType::Screen(None)
+        ));
+        assert!(matches!(
+            ObjectType::with_none("group").unwrap(),
+            ObjectType::Group(None)
+        ));
+        assert!(matches!(
+            ObjectType::with_none("layout").unwrap(),
+            ObjectType::Layout(None)
+        ));
+        assert!(matches!(
+            ObjectType::with_none("window").unwrap(),
+            ObjectType::Window(None)
+        ));
+        assert!(matches!(
+            ObjectType::with_none("bar").unwrap(),
+            ObjectType::Bar(None)
+        ));
+        assert!(matches!(
+            ObjectType::with_none("widget").unwrap(),
+            ObjectType::Widget(None)
+        ));
+        assert!(matches!(
+            ObjectType::with_none("core").unwrap(),
+            ObjectType::Core
+        ));
+        assert!(matches!(
+            ObjectType::with_none("root").unwrap(),
+            ObjectType::Root
+        ));
+        assert!(ObjectType::with_none("invalid").is_err());
+    }
+}

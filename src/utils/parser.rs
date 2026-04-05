@@ -4,9 +4,9 @@ use crate::utils::{
 };
 use anyhow::{bail, Context};
 use itertools::{EitherOrBoth::*, Itertools};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_json::Number;
 use serde_json::Value;
-use serde_tuple::Serialize_tuple;
 use std::{collections::HashMap, str::FromStr};
 use strum::Display;
 
@@ -27,25 +27,15 @@ impl FromStr for NumberOrString {
     }
 }
 
-/// Represents a parsed Qtile command ready for serialization.
-///
-/// Example JSON structure for a complex command:
-/// ```json
-/// [
-///   [ ["screen", null], ["bar", "bottom"] ],
-///   "eval",
-///   ["[w.info() for w in self.widgets]"],
-///   {},
-///   true
-/// ]
-/// ```
-#[derive(Serialize_tuple, Deserialize, Debug)]
+/// Represents a parsed Qtile command ready for serialization as a JSON object (new IPC).
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CommandParser {
-    selectors: Vec<Vec<Value>>,
-    command: String,
-    args: Vec<String>,
-    kwargs: HashMap<String, Value>,
-    lifted: bool,
+    pub selectors: Vec<Vec<Value>>,
+    #[serde(rename = "name")]
+    pub command: String,
+    pub args: Vec<String>,
+    pub kwargs: HashMap<String, Value>,
+    pub lifted: bool,
 }
 
 /// The result of parsing parameters, either an executable command or help text.
@@ -61,6 +51,7 @@ impl CommandParser {
         function: Option<String>,
         args: Option<Vec<String>>,
         info: bool,
+        framed: bool,
     ) -> anyhow::Result<CommandAction> {
         let command: String;
         let mut args_to_be_sent: Vec<String> = vec![];
@@ -76,14 +67,20 @@ impl CommandParser {
         match function {
             Some(ref s) => {
                 if "help" == s.as_str() {
-                    let help = Self::get_help(&selectors, None)?;
+                    let help = Self::get_help(&selectors, None, framed)?;
                     return Ok(CommandAction::Help(help));
                 } else if info {
                     let info_cmd = s.to_owned();
                     let info_text = format!(
                         "{} {}",
                         s,
-                        Self::get_formatted_info(selectors.clone(), &info_cmd, true, false)?
+                        Self::get_formatted_info(
+                            selectors.clone(),
+                            &info_cmd,
+                            true,
+                            false,
+                            framed
+                        )?
                     );
                     return Ok(CommandAction::Help(info_text));
                 } else {
@@ -91,7 +88,7 @@ impl CommandParser {
                 }
             }
             None => {
-                let help = Self::get_help(&selectors, None)?;
+                let help = Self::get_help(&selectors, None, framed)?;
                 return Ok(CommandAction::Help(help));
             }
         }
@@ -113,6 +110,7 @@ impl CommandParser {
     pub fn get_help(
         selectors: &[Vec<Value>],
         object_names: Option<Vec<String>>,
+        framed: bool,
     ) -> anyhow::Result<String> {
         let commands = CommandParser {
             selectors: selectors.to_owned(),
@@ -122,8 +120,8 @@ impl CommandParser {
             lifted: true,
         };
         let data = serde_json::to_string(&commands).context("Failed to serialize help command")?;
-        let response = Client::send(data);
-        let result = Client::match_response(response);
+        let response = Client::send_request(data, framed);
+        let result = Client::match_response(response, framed);
 
         match result {
             Ok(Value::Array(arr)) => {
@@ -131,7 +129,7 @@ impl CommandParser {
                     .map(|v| v.iter().join(" "))
                     .unwrap_or_else(|| "root".to_owned());
                 let prefix = format!("-o {obj_string} -f ");
-                Self::get_commands_help(selectors.to_owned(), prefix, arr)
+                Self::get_commands_help(selectors.to_owned(), prefix, arr, framed)
             }
             Ok(_) => bail!("'commands' result should be an array"),
             Err(err) => bail!("qtile error: {err}"),
@@ -165,6 +163,7 @@ impl CommandParser {
         selectors: Vec<Vec<Value>>,
         prefix: String,
         arr: Vec<Value>,
+        framed: bool,
     ) -> anyhow::Result<String> {
         let commands = arr
             .iter()
@@ -175,7 +174,10 @@ impl CommandParser {
             })
             .collect::<anyhow::Result<Vec<String>>>()?;
 
-        let eval_cmd = format!("[self.cmd_doc(cmd) for cmd in {commands:?}]");
+        // Use a unique separator to batch docstrings into a single string.
+        // This avoids issues with Python's 'eval()' returning stringified lists.
+        let sep = "\u{0001}";
+        let eval_cmd = format!("'{sep}'.join([self.doc(cmd) for cmd in {commands:?}])");
         let eval_parser = CommandParser {
             selectors: selectors.clone(),
             command: "eval".to_string(),
@@ -185,26 +187,21 @@ impl CommandParser {
         };
 
         let data = serde_json::to_string(&eval_parser).context("Failed to serialize eval")?;
-        let result = Client::match_response(Client::send(data))?;
+        let result = Client::match_response(Client::send_request(data, framed), framed)?;
 
-        let docs = match result {
-            Value::Array(arr) => {
-                let success = arr[0].as_bool().context("eval success status invalid")?;
-                if !success {
-                    let err = &arr[1];
-                    bail!("eval failed: {err}");
-                }
-                arr[1]
-                    .as_array()
-                    .context("eval result not an array")?
-                    .to_owned()
-            }
-            _ => bail!("eval result should be an array"),
-        };
+        let docs_str = result.as_str().context("eval result should be a string")?;
+        let docs: Vec<&str> = docs_str.split(sep).collect();
+
+        if docs.len() != commands.len() {
+            bail!(
+                "eval result length mismatch: expected {}, got {}",
+                commands.len(),
+                docs.len()
+            );
+        }
 
         let mut output: Vec<[String; 2]> = vec![];
-        for (cmd, doc_val) in commands.iter().zip(docs.iter()) {
-            let doc_str = doc_val.as_str().context("doc result invalid")?;
+        for (cmd, doc_str) in commands.iter().zip(docs.iter()) {
             let formatted = Self::parse_docstring(doc_str, true, true)?;
             output.push([format!("{prefix}{cmd}"), formatted]);
         }
@@ -227,6 +224,7 @@ impl CommandParser {
         cmd: &str,
         args: bool,
         short: bool,
+        framed: bool,
     ) -> anyhow::Result<String> {
         let commands = CommandParser {
             selectors: selectors.clone(),
@@ -236,8 +234,8 @@ impl CommandParser {
             lifted: true,
         };
         let data = serde_json::to_string(&commands).context("Failed to serialize doc")?;
-        let response = Client::send(data);
-        match Client::match_response(response) {
+        let response = Client::send_request(data, framed);
+        match Client::match_response(response, framed) {
             Ok(res) => {
                 let doc = res.as_str().context("doc result not a string")?;
                 Self::parse_docstring(doc, args, short)
@@ -286,6 +284,7 @@ impl CommandParser {
 
                                 match arg1_parsed {
                                     NumberOrString::Uint(index) => {
+                                        // Attempt numeric index resolution first
                                         let obj_type = ObjectType::with_number(&name, index);
                                         match obj_type {
                                             Ok(o) => {
@@ -293,19 +292,28 @@ impl CommandParser {
                                                     ObjectType::Layout(i)
                                                     | ObjectType::Screen(i)
                                                     | ObjectType::Window(i) => i,
-                                                    _ => bail!(
-                                                        "Object {name} does not accept numeric index"
-                                                    ),
+                                                    _ => None,
                                                 };
                                                 parsed_next = true;
                                                 selectors.push(vec![
                                                     Value::String(name),
-                                                    idx.map(Value::from).unwrap_or(Value::Null),
+                                                    idx.map(|i| Value::Number(Number::from(i)))
+                                                        .unwrap_or(Value::Null),
                                                 ]);
                                             }
                                             Err(_) => {
-                                                selectors
-                                                    .push(vec![Value::String(name), Value::Null]);
+                                                // Fallback to string if number is not supported (e.g. group "1")
+                                                if ObjectType::with_string(&name, index.to_string())
+                                                    .is_ok()
+                                                {
+                                                    parsed_next = true;
+                                                    selectors.push(vec![
+                                                        Value::String(name),
+                                                        Value::String(index.to_string()),
+                                                    ]);
+                                                } else {
+                                                    bail!("Object {name} does not take a numeric index");
+                                                }
                                             }
                                         }
                                     }
@@ -321,8 +329,10 @@ impl CommandParser {
                                                 ]);
                                             }
                                             Err(_) => {
-                                                selectors
-                                                    .push(vec![Value::String(name), Value::Null]);
+                                                selectors.push(vec![
+                                                    Value::String(name.clone()),
+                                                    Value::Null,
+                                                ]);
                                             }
                                         }
                                     }
@@ -340,5 +350,172 @@ impl CommandParser {
             }
         }
         Ok(selectors)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_number_or_string_from_str() {
+        assert_eq!(
+            NumberOrString::from_str("123").unwrap(),
+            NumberOrString::Uint(123)
+        );
+        assert_eq!(
+            NumberOrString::from_str("abc").unwrap(),
+            NumberOrString::String("abc".to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_object_simple() {
+        let obj = vec!["group".to_string()];
+        let selectors = CommandParser::get_object(obj).unwrap();
+        assert_eq!(
+            selectors,
+            vec![vec![Value::String("group".into()), Value::Null]]
+        );
+    }
+
+    #[test]
+    fn test_get_object_with_selector() {
+        let obj = vec!["group".to_string(), "1".to_string()];
+        let selectors = CommandParser::get_object(obj).unwrap();
+        assert_eq!(
+            selectors,
+            vec![vec![
+                Value::String("group".into()),
+                Value::String("1".into())
+            ]]
+        );
+    }
+
+    #[test]
+    fn test_get_object_with_index() {
+        let obj = vec!["screen".to_string(), "0".to_string()];
+        let selectors = CommandParser::get_object(obj).unwrap();
+        assert_eq!(
+            selectors,
+            vec![vec![
+                Value::String("screen".into()),
+                Value::Number(0.into())
+            ]]
+        );
+    }
+
+    #[test]
+    fn test_get_object_root() {
+        let obj = vec!["root".to_string(), "layout".to_string()];
+        let selectors = CommandParser::get_object(obj).unwrap();
+        assert_eq!(
+            selectors,
+            vec![vec![Value::String("layout".into()), Value::Null]]
+        );
+    }
+
+    #[test]
+    fn test_get_object_invalid() {
+        let obj = vec!["nonexistent".to_string()];
+        assert!(CommandParser::get_object(obj).is_err());
+    }
+
+    #[test]
+    fn test_get_object_complex_selector() {
+        // Test bar with a string name that looks like a number
+        let obj = vec!["bar".to_string(), "1".to_string()];
+        let selectors = CommandParser::get_object(obj).unwrap();
+        assert_eq!(
+            selectors,
+            vec![vec![Value::String("bar".into()), Value::String("1".into())]]
+        );
+    }
+
+    #[test]
+    fn test_get_object_multi_level() {
+        let obj = vec![
+            "group".to_string(),
+            "1".to_string(),
+            "window".to_string(),
+            "123".to_string(),
+        ];
+        let selectors = CommandParser::get_object(obj).unwrap();
+        assert_eq!(
+            selectors,
+            vec![
+                vec![Value::String("group".into()), Value::String("1".into())],
+                vec![Value::String("window".into()), Value::Number(123.into())],
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_docstring() {
+        let doc = "cmd(arg1, arg2)\nThis is a test command.";
+        let parsed = CommandParser::parse_docstring(doc, true, false).unwrap();
+        assert_eq!(parsed, "(arg1, arg2) This is a test command.");
+
+        let parsed_no_args = CommandParser::parse_docstring(doc, false, false).unwrap();
+        assert_eq!(parsed_no_args, " This is a test command.");
+
+        let parsed_short = CommandParser::parse_docstring(doc, true, true).unwrap();
+        assert_eq!(parsed_short, "* This is a test command.");
+    }
+
+    #[test]
+    fn test_parse_docstring_errors() {
+        assert!(CommandParser::parse_docstring("no parens", true, false).is_err());
+        assert!(CommandParser::parse_docstring("missing end (", true, false).is_err());
+    }
+
+    #[test]
+    fn test_get_object_errors() {
+        // Number at start
+        assert!(CommandParser::get_object(vec!["1".into()]).is_err());
+        // Unknown object name
+        assert!(CommandParser::get_object(vec!["unknown".into()]).is_err());
+        // Object that doesn't take index
+        assert!(CommandParser::get_object(vec!["core".into(), "1".into()]).is_err());
+    }
+
+    #[test]
+    fn test_command_parser_from_params() {
+        // Execute action
+        let action = CommandParser::from_params(
+            Some(vec!["group".into()]),
+            Some("info".into()),
+            None,
+            false,
+            true, // use framing for coverage env
+        )
+        .unwrap();
+        if let CommandAction::Execute(p) = action {
+            assert_eq!(p.command, "info");
+            assert_eq!(p.selectors.len(), 1);
+        } else {
+            panic!("Expected Execute action");
+        }
+
+        // Help action
+        let action_help =
+            CommandParser::from_params(None, Some("help".into()), None, false, true).unwrap();
+        assert!(matches!(action_help, CommandAction::Help(_)));
+
+        // Implicit help (no function)
+        let action_no_func = CommandParser::from_params(None, None, None, false, true).unwrap();
+        assert!(matches!(action_no_func, CommandAction::Help(_)));
+
+        // Info action
+        let action_info =
+            CommandParser::from_params(None, Some("status".into()), None, true, true).unwrap();
+        assert!(matches!(action_info, CommandAction::Help(_)));
+    }
+
+    #[test]
+    fn test_command_parser_get_help() {
+        // In the coverage env, qtile is running, so this should succeed.
+        let res = CommandParser::get_help(&[], None, true);
+        assert!(res.is_ok());
     }
 }
