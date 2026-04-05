@@ -35,9 +35,19 @@ def check_dependency(pkg, version):
     install_dir = os.environ.get("INSTALL_DIR", "")
     
     if pkg == "xwayland":
-        if os.path.exists(os.path.join(install_dir, "bin/Xwayland")) or os.path.exists("/usr/bin/Xwayland"):
+        installed = get_installed_version("xwayland")
+        if not installed:
+            return False
+        
+        # Simple numeric version comparison (e.g. 22.1.9 >= 21.0.0)
+        def ver_tuple(v):
+            return tuple(map(int, (v.split('.') + [0, 0, 0])[:3]))
+        
+        try:
+            return ver_tuple(installed) >= ver_tuple(version)
+        except (ValueError, AttributeError):
+            # Fallback to simple existence if version parsing fails
             return True
-        return False
 
     env = os.environ.copy()
     if install_dir:
@@ -58,8 +68,21 @@ def get_installed_version(pkg):
     install_dir = os.environ.get("INSTALL_DIR", "")
     
     if pkg == "xwayland":
-        if os.path.exists(os.path.join(install_dir, "bin/Xwayland")) or os.path.exists("/usr/bin/Xwayland"):
-            return "binary-found"
+        binary = os.path.join(install_dir, "bin/Xwayland")
+        if not os.path.exists(binary):
+            binary = "/usr/bin/Xwayland"
+        
+        if os.path.exists(binary):
+            try:
+                # Xwayland -version prints to stderr and returns 0
+                output = subprocess.check_output([binary, "-version"], stderr=subprocess.STDOUT).decode()
+                # Match "Version X.Y.Z"
+                m = re.search(r"Version\s+([0-9.]+)", output)
+                if m:
+                    return m.group(1)
+                return "unknown-version"
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                return "binary-found"
         return None
 
     env = os.environ.copy()
@@ -152,8 +175,8 @@ should_build() {{
     pkg=$(python3 "{this_script}" dummy dummy --get-pkg "$prefix" "$clean_v")
 
     if [ "$pkg" = "xwayland" ]; then
-        if [ -f "$INSTALL_DIR/bin/Xwayland" ] || [ -f "/usr/bin/Xwayland" ]; then
-            echo "Xwayland found, skipping build."
+        if python3 "{this_script}" dummy dummy --check-dep xwayland "$clean_v"; then
+            echo "Xwayland $clean_v already satisfied, skipping build."
             return 1
         fi
     elif [ "$pkg" = "hwdata" ] || [[ "$version_str" == v* ]]; then
@@ -243,7 +266,7 @@ should_build() {{
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: patch_wayland_setup.py <input> <output> [--check-all] [--get-pkg <prefix> <version>]")
+        print("Usage: patch_wayland_setup.py <input> <output> [--check-all] [--get-pkg <prefix> <version>] [--check-dep <pkg> <version>]")
         sys.exit(1)
 
     if "--get-pkg" in sys.argv:
@@ -252,6 +275,12 @@ if __name__ == "__main__":
         version = sys.argv[idx + 2]
         print(get_pkg_name(prefix, version))
         sys.exit(0)
+
+    if "--check-dep" in sys.argv:
+        idx = sys.argv.index("--check-dep")
+        pkg = sys.argv[idx + 1]
+        version = sys.argv[idx + 2]
+        sys.exit(0 if check_dependency(pkg, version) else 1)
 
     input_file = sys.argv[1]
     output_file = sys.argv[2]
