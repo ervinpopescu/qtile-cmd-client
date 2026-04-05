@@ -20,37 +20,37 @@ UPSTREAM_URL="https://raw.githubusercontent.com/qtile/qtile/refs/heads/master/sc
 TEMP_SETUP=$(mktemp /tmp/wayland_setup.XXXXXX)
 wget -qO "$TEMP_SETUP" "$UPSTREAM_URL"
 
-# shellcheck disable=SC1090
-source <(grep -E "^[A-Z_]+=[0-9.]+" "$TEMP_SETUP")
+export INSTALL_DIR
+if python3 ./.github/scripts/patch_wayland_setup.py "$TEMP_SETUP" /dev/null --check-all; then
+  echo "All foundation dependencies found in $INSTALL_DIR (or system). skipping lock and build."
+  
+  # Ensure Xwayland symlink if found in PVC
+  if [ -f "$INSTALL_DIR/bin/Xwayland" ] && [ ! -f "/usr/bin/Xwayland" ]; then
+    echo "Creating Xwayland symlink from PVC..."
+    sudo ln -sf "$INSTALL_DIR/bin/Xwayland" /usr/bin/Xwayland
+  fi
 
-ALL_PRESENT=1
-pkg-config --atleast-version="$WAYLAND" wayland-client || ALL_PRESENT=0
-pkg-config --atleast-version="$WLROOTS" "wlroots-$(echo "$WLROOTS" | cut -d. -f1,2)" || ALL_PRESENT=0
-
-# Check for Xwayland in either /usr/bin or our PVC
-if [ -f "/usr/bin/Xwayland" ]; then
-  echo "Xwayland found in /usr/bin"
-elif [ -f "$INSTALL_DIR/bin/Xwayland" ]; then
-  echo "Xwayland found in PVC, creating symlink..."
-  sudo ln -sf "$INSTALL_DIR/bin/Xwayland" /usr/bin/Xwayland
-else
-  ALL_PRESENT=0
-fi
-
-if [ "$ALL_PRESENT" -eq 1 ]; then
-  echo "All foundation dependencies satisfied in $INSTALL_DIR. skipping lock and build."
   rm -f "$TEMP_SETUP"
   exit 0
 fi
 
 # 3. Acquire Atomic Lock (Only if we actually need to build)
 LOCK_DIR="$WAYLAND_CACHE/global_install.lock"
+WE_OWN_LOCK=0
 
 cleanup() {
-  rm -rf "$LOCK_DIR"
+  if [ "$WE_OWN_LOCK" -eq 1 ]; then
+    echo "Releasing global install lock..."
+    rm -rf "$LOCK_DIR"
+  fi
   rm -f "$TEMP_SETUP"
 }
-trap cleanup EXIT
+
+# Trap EXIT for normal completion/errors, and INT/TERM/HUP for cancellations
+trap 'cleanup' EXIT
+trap 'cleanup; exit 143' TERM
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 129' HUP
 
 acquire_lock() {
   local start_time
@@ -71,6 +71,9 @@ acquire_lock() {
       exit 1
     fi
   done
+  
+  # We successfully created the directory, so we own the lock
+  WE_OWN_LOCK=1
 }
 
 acquire_lock
@@ -92,7 +95,6 @@ sudo apt -y install "$@"
 # 5. Patch and Execute Setup Script
 PATCHED_SETUP=$(mktemp /tmp/wayland_setup_patched.XXXXXX)
 sed -i "s|mkdir -p cache|cache=\"$WAYLAND_CACHE\"; mkdir -p \"\$cache\"; cd \"\$cache\"|g" "$TEMP_SETUP"
-sed -i "s|--prefix=/usr|--prefix=\"$INSTALL_DIR\"|g" "$TEMP_SETUP"
 # shellcheck disable=SC2016
 sed -i 's|if \[ -f "cache/\$filename" \];|if [ -f "$filename" ];|g' "$TEMP_SETUP"
 sed -i 's|wget -P cache|wget -P .|g' "$TEMP_SETUP"

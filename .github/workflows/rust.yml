@@ -48,8 +48,8 @@ jobs:
           rustup toolchain install stable nightly --profile minimal --no-self-update
           rustup default stable
           rustup component add llvm-tools
-          cargo install sccache --locked
-          cargo install cargo-llvm-cov --locked
+          cargo install sccache
+          cargo install cargo-llvm-cov
 
       - name: Install System Deps
         run: ./.github/scripts/install-deps $(cat ./deps)
