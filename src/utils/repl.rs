@@ -1,21 +1,23 @@
-use crate::utils::client::{CallResult, InteractiveCommandClient};
+use crate::utils::client::{CommandQuery, QtileClient};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 
 /// Interactive shell for navigating the Qtile command graph and invoking functions.
 pub struct Repl {
+    client: QtileClient,
     current_object: Vec<String>,
 }
 
 impl Default for Repl {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
 impl Repl {
-    pub fn new() -> Self {
+    pub fn new(framed: bool) -> Self {
         Self {
+            client: QtileClient::new(framed),
             current_object: vec!["root".to_string()],
         }
     }
@@ -55,12 +57,11 @@ impl Repl {
                             let mut next_obj = self.current_object.clone();
                             next_obj.extend(target.split_whitespace().map(|s| s.to_string()));
 
-                            let res = InteractiveCommandClient::call(
-                                Some(next_obj.clone()),
-                                Some("commands".to_string()),
-                                None,
-                                false,
-                            );
+                            let query = CommandQuery::new()
+                                .object(next_obj.clone())
+                                .function("commands".to_string());
+
+                            let res = self.client.call(query);
 
                             if res.is_ok() {
                                 self.current_object = next_obj;
@@ -81,16 +82,17 @@ impl Repl {
                         None
                     };
 
-                    let res = InteractiveCommandClient::call(
-                        Some(self.current_object.clone()),
-                        Some(function),
-                        args,
-                        false,
-                    );
+                    let mut query = CommandQuery::new()
+                        .object(self.current_object.clone())
+                        .function(function.to_string());
+                    if let Some(a) = args {
+                        query = query.args(a);
+                    }
+
+                    let res = self.client.call(query);
 
                     match res {
-                        Ok(CallResult::Value(val)) => println!("{val:#}"),
-                        Ok(CallResult::Text(text)) => println!("{text}"),
+                        Ok(result) => println!("{result}"),
                         Err(e) => println!("Error: {e}"),
                     }
                 }

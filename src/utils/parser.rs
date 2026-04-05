@@ -4,9 +4,9 @@ use crate::utils::{
 };
 use anyhow::{bail, Context};
 use itertools::{EitherOrBoth::*, Itertools};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_json::Number;
 use serde_json::Value;
-use serde_tuple::Serialize_tuple;
 use std::{collections::HashMap, str::FromStr};
 use strum::Display;
 
@@ -27,25 +27,15 @@ impl FromStr for NumberOrString {
     }
 }
 
-/// Represents a parsed Qtile command ready for serialization.
-///
-/// Example JSON structure for a complex command:
-/// ```json
-/// [
-///   [ ["screen", null], ["bar", "bottom"] ],
-///   "eval",
-///   ["[w.info() for w in self.widgets]"],
-///   {},
-///   true
-/// ]
-/// ```
-#[derive(Serialize_tuple, Deserialize, Debug)]
+/// Represents a parsed Qtile command ready for serialization as a JSON object (new IPC).
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CommandParser {
-    selectors: Vec<Vec<Value>>,
-    command: String,
-    args: Vec<String>,
-    kwargs: HashMap<String, Value>,
-    lifted: bool,
+    pub selectors: Vec<Vec<Value>>,
+    #[serde(rename = "name")]
+    pub command: String,
+    pub args: Vec<String>,
+    pub kwargs: HashMap<String, Value>,
+    pub lifted: bool,
 }
 
 /// The result of parsing parameters, either an executable command or help text.
@@ -61,6 +51,7 @@ impl CommandParser {
         function: Option<String>,
         args: Option<Vec<String>>,
         info: bool,
+        framed: bool,
     ) -> anyhow::Result<CommandAction> {
         let command: String;
         let mut args_to_be_sent: Vec<String> = vec![];
@@ -76,14 +67,20 @@ impl CommandParser {
         match function {
             Some(ref s) => {
                 if "help" == s.as_str() {
-                    let help = Self::get_help(&selectors, None)?;
+                    let help = Self::get_help(&selectors, None, framed)?;
                     return Ok(CommandAction::Help(help));
                 } else if info {
                     let info_cmd = s.to_owned();
                     let info_text = format!(
                         "{} {}",
                         s,
-                        Self::get_formatted_info(selectors.clone(), &info_cmd, true, false)?
+                        Self::get_formatted_info(
+                            selectors.clone(),
+                            &info_cmd,
+                            true,
+                            false,
+                            framed
+                        )?
                     );
                     return Ok(CommandAction::Help(info_text));
                 } else {
@@ -91,7 +88,7 @@ impl CommandParser {
                 }
             }
             None => {
-                let help = Self::get_help(&selectors, None)?;
+                let help = Self::get_help(&selectors, None, framed)?;
                 return Ok(CommandAction::Help(help));
             }
         }
@@ -113,6 +110,7 @@ impl CommandParser {
     pub fn get_help(
         selectors: &[Vec<Value>],
         object_names: Option<Vec<String>>,
+        framed: bool,
     ) -> anyhow::Result<String> {
         let commands = CommandParser {
             selectors: selectors.to_owned(),
@@ -122,8 +120,8 @@ impl CommandParser {
             lifted: true,
         };
         let data = serde_json::to_string(&commands).context("Failed to serialize help command")?;
-        let response = Client::send(data);
-        let result = Client::match_response(response);
+        let response = Client::send_request(data, framed);
+        let result = Client::match_response(response, framed);
 
         match result {
             Ok(Value::Array(arr)) => {
@@ -131,7 +129,7 @@ impl CommandParser {
                     .map(|v| v.iter().join(" "))
                     .unwrap_or_else(|| "root".to_owned());
                 let prefix = format!("-o {obj_string} -f ");
-                Self::get_commands_help(selectors.to_owned(), prefix, arr)
+                Self::get_commands_help(selectors.to_owned(), prefix, arr, framed)
             }
             Ok(_) => bail!("'commands' result should be an array"),
             Err(err) => bail!("qtile error: {err}"),
@@ -165,6 +163,7 @@ impl CommandParser {
         selectors: Vec<Vec<Value>>,
         prefix: String,
         arr: Vec<Value>,
+        framed: bool,
     ) -> anyhow::Result<String> {
         let commands = arr
             .iter()
@@ -175,7 +174,10 @@ impl CommandParser {
             })
             .collect::<anyhow::Result<Vec<String>>>()?;
 
-        let eval_cmd = format!("[self.cmd_doc(cmd) for cmd in {commands:?}]");
+        // Use a unique separator to batch docstrings into a single string.
+        // This avoids issues with Python's 'eval()' returning stringified lists.
+        let sep = "\u{0001}";
+        let eval_cmd = format!("'{sep}'.join([self.doc(cmd) for cmd in {commands:?}])");
         let eval_parser = CommandParser {
             selectors: selectors.clone(),
             command: "eval".to_string(),
@@ -185,26 +187,21 @@ impl CommandParser {
         };
 
         let data = serde_json::to_string(&eval_parser).context("Failed to serialize eval")?;
-        let result = Client::match_response(Client::send(data))?;
+        let result = Client::match_response(Client::send_request(data, framed), framed)?;
 
-        let docs = match result {
-            Value::Array(arr) => {
-                let success = arr[0].as_bool().context("eval success status invalid")?;
-                if !success {
-                    let err = &arr[1];
-                    bail!("eval failed: {err}");
-                }
-                arr[1]
-                    .as_array()
-                    .context("eval result not an array")?
-                    .to_owned()
-            }
-            _ => bail!("eval result should be an array"),
-        };
+        let docs_str = result.as_str().context("eval result should be a string")?;
+        let docs: Vec<&str> = docs_str.split(sep).collect();
+
+        if docs.len() != commands.len() {
+            bail!(
+                "eval result length mismatch: expected {}, got {}",
+                commands.len(),
+                docs.len()
+            );
+        }
 
         let mut output: Vec<[String; 2]> = vec![];
-        for (cmd, doc_val) in commands.iter().zip(docs.iter()) {
-            let doc_str = doc_val.as_str().context("doc result invalid")?;
+        for (cmd, doc_str) in commands.iter().zip(docs.iter()) {
             let formatted = Self::parse_docstring(doc_str, true, true)?;
             output.push([format!("{prefix}{cmd}"), formatted]);
         }
@@ -227,6 +224,7 @@ impl CommandParser {
         cmd: &str,
         args: bool,
         short: bool,
+        framed: bool,
     ) -> anyhow::Result<String> {
         let commands = CommandParser {
             selectors: selectors.clone(),
@@ -236,8 +234,8 @@ impl CommandParser {
             lifted: true,
         };
         let data = serde_json::to_string(&commands).context("Failed to serialize doc")?;
-        let response = Client::send(data);
-        match Client::match_response(response) {
+        let response = Client::send_request(data, framed);
+        match Client::match_response(response, framed) {
             Ok(res) => {
                 let doc = res.as_str().context("doc result not a string")?;
                 Self::parse_docstring(doc, args, short)
@@ -300,7 +298,8 @@ impl CommandParser {
                                                 parsed_next = true;
                                                 selectors.push(vec![
                                                     Value::String(name),
-                                                    idx.map(Value::from).unwrap_or(Value::Null),
+                                                    idx.map(|i| Value::Number(Number::from(i)))
+                                                        .unwrap_or(Value::Null),
                                                 ]);
                                             }
                                             Err(_) => {
