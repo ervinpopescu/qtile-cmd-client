@@ -1,8 +1,7 @@
 /// CLI argument definitions using [`clap`]
 pub mod args;
 /// Client structs
-/// - bin: [`ShellClient`](client::ShellClient)
-/// - lib: [`InteractiveCommandClient`](client::InteractiveCommandClient)
+/// - lib: [`QtileClient`](client::QtileClient)
 pub mod client;
 /// Qtile graph
 ///
