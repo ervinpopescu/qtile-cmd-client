@@ -7,7 +7,7 @@ import subprocess
 def get_pkg_name(prefix, version):
     """Maps tarball prefix to pkg-config name."""
     version = version.lstrip('v')
-    
+
     mapping = {
         "wayland": "wayland-client",
         "wayland-protocols": "wayland-protocols",
@@ -33,16 +33,16 @@ def check_dependency(pkg, version):
     """Checks if a dependency is satisfied using pkg-config or binary check."""
     version = version.lstrip('v')
     install_dir = os.environ.get("INSTALL_DIR", "")
-    
+
     if pkg == "xwayland":
         installed = get_installed_version("xwayland")
         if not installed:
             return False
-        
+
         # Simple numeric version comparison (e.g. 22.1.9 >= 21.0.0)
         def ver_tuple(v):
             return tuple(map(int, (v.split('.') + [0, 0, 0])[:3]))
-        
+
         try:
             return ver_tuple(installed) >= ver_tuple(version)
         except (ValueError, AttributeError):
@@ -66,12 +66,12 @@ def check_dependency(pkg, version):
 def get_installed_version(pkg):
     """Gets the currently installed version of a package."""
     install_dir = os.environ.get("INSTALL_DIR", "")
-    
+
     if pkg == "xwayland":
         binary = os.path.join(install_dir, "bin/Xwayland")
         if not os.path.exists(binary):
             binary = "/usr/bin/Xwayland"
-        
+
         if os.path.exists(binary):
             try:
                 # Xwayland -version prints to stderr and returns 0
@@ -106,16 +106,16 @@ def parse_dependencies(script_content):
     deps = []
     for match in re.finditer(r'tarball="([^"]+)\.tar\..*?"', script_content):
         full_name = match.group(1)
-        
+
         # Resolve variables safely using regex boundaries ($VAR or ${VAR})
         def replacer(m):
             var_name = m.group(1) or m.group(2)
             return vars.get(var_name, m.group(0))
-            
+
         full_name = re.sub(r'\$([A-Za-z_][A-Za-z0-9_]*)|\$\{([A-Za-z_][A-Za-z0-9_]*)\}', replacer, full_name)
-        
+
         # Now full_name is expanded (e.g. wayland-1.24.0, libdrm-libdrm-2.4.122, 0.6.4, v0.364)
-        
+
         # Some tarballs don't have a prefix (like seatd which is just $SEATD.tar.gz)
         # Or hwdata which is v$HWDATA.tar.gz
         if '-' not in full_name:
@@ -127,22 +127,22 @@ def parse_dependencies(script_content):
                 version = full_name
                 deps.append((prefix, version))
             continue
-            
+
         # Split on the first dash that is followed by a digit or 'v'
         m = re.search(r'^(.*?)-([v0-9].*)$', full_name)
         if not m:
             continue
-            
+
         prefix = m.group(1)
         version = m.group(2)
-        
+
         deps.append((prefix, version))
     return deps
 
 def patch_script(input_path, output_path):
     with open(input_path, 'r') as f:
         content = f.read()
-    
+
     lines = content.splitlines(keepends=True)
 
     # Build the shell-side check logic
@@ -152,7 +152,7 @@ def patch_script(input_path, output_path):
 should_build() {{
     tarball_expr=$1
     base=$(echo "$tarball_expr" | sed 's/\.tar\..*//')
-    
+
     # Check if base has a dash
     if [[ "$base" == *-* ]]; then
         # prefix is everything before the first dash-digit or dash-v
@@ -168,9 +168,9 @@ should_build() {{
             prefix="seatd"
         fi
     fi
-    
+
     clean_v=${{version_str#v}}
-    
+
     # Resolve package name using python helper
     pkg=$(python3 "{this_script}" dummy dummy --get-pkg "$prefix" "$clean_v")
 
@@ -200,7 +200,7 @@ should_build() {{
 
     while i < len(lines):
         line = lines[i]
-        
+
         if "apt update" in line and not in_apt_group:
             new_lines.append('echo "::group::🔄 Installing System Dependencies (apt)"\n')
             in_apt_group = True
@@ -213,9 +213,9 @@ should_build() {{
             if in_apt_group:
                 new_lines.append('echo "::endgroup::"\n')
                 in_apt_group = False
-                
+
             tarball_expr = tarball_match.group(1)
-            
+
             # Extract a friendly name for the group header
             import re as _re
             base = _re.sub(r'\.tar\..*', '', tarball_expr)
@@ -223,7 +223,7 @@ should_build() {{
                 prefix = 'hwdata' if base.startswith('v') else 'seatd'
             else:
                 prefix = _re.sub(r'-[v0-9\$].*', '', base)
-            
+
             new_lines.append(line)
             new_lines.append(f'if should_build "{tarball_expr}"; then\n')
             new_lines.append(f'echo "::group::📦 Building {prefix} (from source)"\n')
@@ -284,25 +284,25 @@ if __name__ == "__main__":
 
     input_file = sys.argv[1]
     output_file = sys.argv[2]
-    
+
     if "--check-all" in sys.argv:
         with open(input_file, 'r') as f:
             content = f.read()
         dependencies = parse_dependencies(content)
         all_ok = True
-        
+
         # We know these are standard, anything else might be new
         known_prefixes = {"wayland", "wayland-protocols", "libdrm", "seatd", "pixman", "hwdata", "wlroots", "xserver-xwayland", "libdrm-libdrm", "pixman-pixman"}
-        
+
         print("::group::Dependency Verification (--check-all)")
         for prefix, version in dependencies:
             pkg = get_pkg_name(prefix, version)
             clean_v = version.lstrip('v')
             installed_ver = get_installed_version(pkg)
-            
+
             if prefix not in known_prefixes:
                 print(f"::warning::⚠️ NEW DEPENDENCY DETECTED in upstream script: {prefix} ({clean_v}) -> mapped to {pkg}")
-            
+
             if not check_dependency(pkg, clean_v):
                 if installed_ver:
                     print(f"::warning::🔄 VERSION BUMP DETECTED for {pkg}: installed {installed_ver}, needs >= {clean_v}")
@@ -311,7 +311,7 @@ if __name__ == "__main__":
             else:
                 print(f"✅ Dependency satisfied: {pkg} (installed {installed_ver})")
         print("::endgroup::")
-        
+
         sys.exit(0 if all_ok else 1)
 
     patch_script(input_file, output_file)
