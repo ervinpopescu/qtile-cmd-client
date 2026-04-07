@@ -13,4 +13,5 @@ pub mod ipc;
 /// Translates CLI parameters into Qtile IPC JSON payloads
 pub mod parser;
 /// Interactive REPL mode
+#[cfg(feature = "repl")]
 pub mod repl;

@@ -47,5 +47,6 @@ pub enum Commands {
         json: bool,
     },
     /// Start an interactive REPL session.
+    #[cfg(feature = "repl")]
     Repl,
 }

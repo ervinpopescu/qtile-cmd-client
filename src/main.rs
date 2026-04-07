@@ -3,10 +3,11 @@
 use anyhow::bail;
 use clap::Parser;
 pub(crate) mod utils;
+#[cfg(feature = "repl")]
+use utils::repl::Repl;
 use utils::{
     args::{Args, Commands},
     client::{CallResult, InteractiveCommandClient},
-    repl::Repl,
 };
 
 fn main() -> anyhow::Result<()> {
@@ -43,6 +44,7 @@ fn main() -> anyhow::Result<()> {
             };
             Ok(())
         }
+        #[cfg(feature = "repl")]
         Commands::Repl => {
             let mut repl = Repl::new();
             repl.run()

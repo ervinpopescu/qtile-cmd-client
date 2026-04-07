@@ -23,7 +23,7 @@ wget -qO "$TEMP_SETUP" "$UPSTREAM_URL"
 export INSTALL_DIR
 if python3 ./.github/scripts/patch_wayland_setup.py "$TEMP_SETUP" /dev/null --check-all; then
   echo "All foundation dependencies found in $INSTALL_DIR (or system). skipping lock and build."
-  
+
   # Ensure Xwayland symlink if found in PVC
   if [ -f "$INSTALL_DIR/bin/Xwayland" ] && [ ! -f "/usr/bin/Xwayland" ]; then
     echo "Creating Xwayland symlink from PVC..."
@@ -71,7 +71,7 @@ acquire_lock() {
       exit 1
     fi
   done
-  
+
   # We successfully created the directory, so we own the lock
   WE_OWN_LOCK=1
 }
