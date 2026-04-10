@@ -9,21 +9,82 @@ QTILE_REPO="${2:-https://github.com/qtile/qtile}"
 # Use provided qtile branch or default to master
 QTILE_BRANCH="${3:-master}"
 
-# Clean up any existing source to ensure a fresh build
-rm -rf qtile-source
+# PVC path for persistent Qtile source and uv tool environment
+QTILE_CACHE_ROOT="${AGENT_TOOLSDIRECTORY:-/tmp}/qtile-cache"
+QTILE_HASH="$(echo "$QTILE_REPO" | md5sum | cut -d' ' -f1)-$QTILE_BRANCH"
+QTILE_SOURCE_DIR="$QTILE_CACHE_ROOT/sources/$QTILE_HASH"
+# Unique tool environment per python version and branch
+TOOL_ENV_DIR="$QTILE_CACHE_ROOT/envs/${QTILE_HASH}-py${PYTHON_VERSION}"
 
-# Clone qtile
-git clone --branch "$QTILE_BRANCH" "$QTILE_REPO" qtile-source
+mkdir -p "$QTILE_CACHE_ROOT/sources" "$QTILE_CACHE_ROOT/envs"
+
+# We must ensure the tool binary is available in the expected location
+mkdir -p "$HOME/.local/bin"
+
+# Acquire a single global lock for this Qtile source branch to prevent concurrent runners
+# (regardless of Python version) from corrupting the git fetch or the virtual environment creation.
+LOCK_DIR="$QTILE_CACHE_ROOT/${QTILE_HASH}.lock"
+acquire_lock() {
+  while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+    if [ -d "$LOCK_DIR" ] && [ "$(($(date +%s) - $(stat -c %Y "$LOCK_DIR")))" -gt 1800 ]; then
+      rm -rf "$LOCK_DIR"
+      continue
+    fi
+    sleep $(( (RANDOM % 5) + 1 ))
+  done
+}
+trap 'rm -rf "$LOCK_DIR"' EXIT
+acquire_lock
+
+# Fast path: If the tool environment already exists and qtile works, we just link it and exit
+if [ -d "$TOOL_ENV_DIR" ] && [ -x "$TOOL_ENV_DIR/bin/qtile" ]; then
+  echo "Found cached Qtile environment for Python $PYTHON_VERSION"
+  ln -sf "$TOOL_ENV_DIR/bin/qtile" "$HOME/.local/bin/qtile"
+  if "$HOME/.local/bin/qtile" --version >/dev/null 2>&1; then
+    echo "Cached Qtile works. Skipping build."
+    if getent group video >/dev/null; then
+      sudo usermod -aG video runner || true
+    fi
+    exit 0
+  else
+    echo "Cached Qtile is broken. Rebuilding..."
+    rm -rf "$TOOL_ENV_DIR"
+  fi
+fi
+
+if [ ! -d "$QTILE_SOURCE_DIR" ]; then
+  echo "Cloning Qtile into $QTILE_SOURCE_DIR..."
+  git clone --branch "$QTILE_BRANCH" "$QTILE_REPO" "$QTILE_SOURCE_DIR"
+else
+  echo "Updating existing Qtile source in $QTILE_SOURCE_DIR..."
+  git -C "$QTILE_SOURCE_DIR" fetch origin "$QTILE_BRANCH"
+  git -C "$QTILE_SOURCE_DIR" reset --hard "origin/$QTILE_BRANCH"
+  git -C "$QTILE_SOURCE_DIR" clean -fdx
+fi
+
+# Copy from PVC to local workspace directory 'qtile-source' to build cleanly
+rm -rf qtile-source
+cp -a "$QTILE_SOURCE_DIR/." qtile-source/
 cd qtile-source
 
 export UV_HTTP_TIMEOUT=300
 
-# Sync and build
+# Sync and build in the isolated directory
 uv sync --python="$PYTHON_VERSION" --all-extras
 uv run ./libqtile/backend/wayland/cffi/build.py
 
-# Install qtile as a tool with wayland support and optional dbus-fast
-uv tool install . --with ".[wayland],dbus-fast" --python "$PYTHON_VERSION" --force
+# Install qtile directly into the persistent cache using a virtual environment, not uv tool
+# `uv tool` handles linking magically, which is hard to move. `uv venv` gives us a standard prefix.
+echo "Installing to persistent cache: $TOOL_ENV_DIR"
+uv venv "$TOOL_ENV_DIR" --python="$PYTHON_VERSION"
+uv pip install --python "$TOOL_ENV_DIR/bin/python" ".[wayland,dbus-fast]"
+
+# Cleanup ephemeral source
+cd ..
+rm -rf qtile-source
+
+# Link the persistent binary to the runner's PATH
+ln -sf "$TOOL_ENV_DIR/bin/qtile" "$HOME/.local/bin/qtile"
 
 # Add runner to video group if it exists
 if getent group video >/dev/null; then
@@ -31,4 +92,4 @@ if getent group video >/dev/null; then
 fi
 
 # Ensure qtile is available and report version
-qtile --version
+"$HOME/.local/bin/qtile" --version

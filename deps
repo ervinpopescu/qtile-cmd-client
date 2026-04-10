@@ -55,3 +55,4 @@ xauth
 xserver-xephyr
 xwayland
 xvfb
+seatd
