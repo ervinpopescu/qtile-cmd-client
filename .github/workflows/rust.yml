@@ -53,9 +53,26 @@ jobs:
       - name: Install System Deps
         run: ./.github/scripts/install-deps $(cat ./deps)
 
+  pre-commit:
+    name: Pre-commit
+    needs: prepare
+    runs-on: qtile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: update GITHUB_PATH
+        run: |
+          echo "${{ env.CARGO_HOME }}/bin" >> $GITHUB_PATH
+          echo "${{ env.RUSTUP_HOME }}/bin" >> $GITHUB_PATH
+          echo "${{ env.UV_INSTALL_DIR }}/bin" >> $GITHUB_PATH
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Run pre-commit
+        run: uv tool run pre-commit run --all-files
+
   lint:
     name: Lint & Format (${{ matrix.rust }})
-    needs: prepare
+    needs: pre-commit
     runs-on: qtile
     env:
       RUSTC_WRAPPER: "sccache"
