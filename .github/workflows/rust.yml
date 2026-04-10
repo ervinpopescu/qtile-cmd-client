@@ -77,10 +77,10 @@ jobs:
         run: cargo +${{ matrix.rust }} fmt -- --check
 
       - name: Cargo check
-        run: cargo +${{ matrix.rust }} check
+        run: cargo +${{ matrix.rust }} check --all-features --all-targets
 
       - name: Clippy
-        run: cargo +${{ matrix.rust }} clippy -- -D warnings
+        run: cargo +${{ matrix.rust }} clippy --all-features --all-targets -- -D warnings
 
       - name: Finalize sccache
         if: always() # Ensures it stops even if tests fail
