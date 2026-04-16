@@ -2,7 +2,6 @@ use super::{
     ipc::Client,
     parser::{CommandAction, CommandParser},
 };
-use anyhow::Context;
 use serde_json::Value;
 use std::fmt;
 
@@ -106,8 +105,7 @@ impl QtileClient {
             CommandParser::from_params(query.object, query.function, query.args, query.info)?;
         match action {
             CommandAction::Execute(c) => {
-                let data = serde_json::to_string(&c)
-                    .context("Failed to serialize CommandParser to JSON object")?;
+                let data = c.to_payload()?;
                 let response = Client::send_request(data);
                 Client::match_response(response).map(CallResult::Value)
             }

@@ -45,6 +45,22 @@ pub enum CommandAction {
 }
 
 impl CommandParser {
+    /// Serializes the command as the JSON array format expected by Qtile's IPC handler:
+    /// `[selectors, name, args, kwargs, lifted]`.
+    ///
+    /// Qtile's `interface.py:call()` positionally unpacks the incoming request as a tuple,
+    /// so the payload must be a JSON array — not a JSON object.
+    pub fn to_payload(&self) -> anyhow::Result<String> {
+        let arr = serde_json::json!([
+            self.selectors,
+            self.command,
+            self.args,
+            self.kwargs,
+            self.lifted
+        ]);
+        serde_json::to_string(&arr).context("Failed to serialize command payload")
+    }
+
     /// Creates a [`CommandAction`] from raw CLI or library parameters.
     pub fn from_params(
         object: Option<Vec<String>>,
@@ -111,7 +127,7 @@ impl CommandParser {
             kwargs: HashMap::new(),
             lifted: true,
         };
-        let data = serde_json::to_string(&commands).context("Failed to serialize help command")?;
+        let data = commands.to_payload()?;
         let response = Client::send_request(data);
         let result = Client::match_response(response);
 
@@ -177,7 +193,7 @@ impl CommandParser {
             lifted: true,
         };
 
-        let data = serde_json::to_string(&eval_parser).context("Failed to serialize eval")?;
+        let data = eval_parser.to_payload()?;
         let result = Client::match_response(Client::send_request(data))?;
 
         let docs_str = result.as_str().context("eval result should be a string")?;
@@ -223,7 +239,7 @@ impl CommandParser {
             kwargs: HashMap::new(),
             lifted: true,
         };
-        let data = serde_json::to_string(&commands).context("Failed to serialize doc")?;
+        let data = commands.to_payload()?;
         let response = Client::send_request(data);
         match Client::match_response(response) {
             Ok(res) => {
@@ -457,6 +473,28 @@ mod tests {
     fn test_parse_docstring_errors() {
         assert!(CommandParser::parse_docstring("no parens", true, false).is_err());
         assert!(CommandParser::parse_docstring("missing end (", true, false).is_err());
+    }
+
+    #[test]
+    fn test_to_payload_is_array() {
+        // Qtile's interface.py positionally unpacks the request, so we must send an array
+        let parser = CommandParser {
+            selectors: vec![vec![Value::String("group".into()), Value::Null]],
+            command: "info".to_string(),
+            args: vec!["arg1".to_string()],
+            kwargs: HashMap::new(),
+            lifted: true,
+        };
+        let payload = parser.to_payload().unwrap();
+        let parsed: Value = serde_json::from_str(&payload).unwrap();
+        // Must be [selectors, name, args, kwargs, lifted]
+        let arr = parsed.as_array().expect("payload must be a JSON array");
+        assert_eq!(arr.len(), 5);
+        assert_eq!(arr[0], serde_json::json!([["group", null]])); // selectors
+        assert_eq!(arr[1], Value::String("info".into())); // name
+        assert_eq!(arr[2], serde_json::json!(["arg1"])); // args
+        assert_eq!(arr[3], serde_json::json!({})); // kwargs
+        assert_eq!(arr[4], Value::Bool(true)); // lifted
     }
 
     #[test]
