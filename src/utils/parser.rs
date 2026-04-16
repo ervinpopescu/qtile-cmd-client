@@ -51,6 +51,7 @@ impl CommandParser {
         function: Option<String>,
         args: Option<Vec<String>>,
         info: bool,
+        framed: bool,
     ) -> anyhow::Result<CommandAction> {
         let command: String;
         let mut args_to_be_sent: Vec<String> = vec![];
@@ -66,14 +67,20 @@ impl CommandParser {
         match function {
             Some(ref s) => {
                 if "help" == s.as_str() {
-                    let help = Self::get_help(&selectors, None)?;
+                    let help = Self::get_help(&selectors, None, framed)?;
                     return Ok(CommandAction::Help(help));
                 } else if info {
                     let info_cmd = s.to_owned();
                     let info_text = format!(
                         "{} {}",
                         s,
-                        Self::get_formatted_info(selectors.clone(), &info_cmd, true, false,)?
+                        Self::get_formatted_info(
+                            selectors.clone(),
+                            &info_cmd,
+                            true,
+                            false,
+                            framed
+                        )?
                     );
                     return Ok(CommandAction::Help(info_text));
                 } else {
@@ -81,7 +88,7 @@ impl CommandParser {
                 }
             }
             None => {
-                let help = Self::get_help(&selectors, None)?;
+                let help = Self::get_help(&selectors, None, framed)?;
                 return Ok(CommandAction::Help(help));
             }
         }
@@ -103,6 +110,7 @@ impl CommandParser {
     pub fn get_help(
         selectors: &[Vec<Value>],
         object_names: Option<Vec<String>>,
+        framed: bool,
     ) -> anyhow::Result<String> {
         let commands = CommandParser {
             selectors: selectors.to_owned(),
@@ -112,8 +120,8 @@ impl CommandParser {
             lifted: true,
         };
         let data = serde_json::to_string(&commands).context("Failed to serialize help command")?;
-        let response = Client::send_request(data);
-        let result = Client::match_response(response);
+        let response = Client::send_request(data, framed);
+        let result = Client::match_response(response, framed);
 
         match result {
             Ok(Value::Array(arr)) => {
@@ -121,7 +129,7 @@ impl CommandParser {
                     .map(|v| v.iter().join(" "))
                     .unwrap_or_else(|| "root".to_owned());
                 let prefix = format!("-o {obj_string} -f ");
-                Self::get_commands_help(selectors.to_owned(), prefix, arr)
+                Self::get_commands_help(selectors.to_owned(), prefix, arr, framed)
             }
             Ok(_) => bail!("'commands' result should be an array"),
             Err(err) => bail!("qtile error: {err}"),
@@ -155,6 +163,7 @@ impl CommandParser {
         selectors: Vec<Vec<Value>>,
         prefix: String,
         arr: Vec<Value>,
+        framed: bool,
     ) -> anyhow::Result<String> {
         let commands = arr
             .iter()
@@ -178,7 +187,7 @@ impl CommandParser {
         };
 
         let data = serde_json::to_string(&eval_parser).context("Failed to serialize eval")?;
-        let result = Client::match_response(Client::send_request(data))?;
+        let result = Client::match_response(Client::send_request(data, framed), framed)?;
 
         let docs_str = result.as_str().context("eval result should be a string")?;
         let docs: Vec<&str> = docs_str.split(sep).collect();
@@ -215,6 +224,7 @@ impl CommandParser {
         cmd: &str,
         args: bool,
         short: bool,
+        framed: bool,
     ) -> anyhow::Result<String> {
         let commands = CommandParser {
             selectors: selectors.clone(),
@@ -224,8 +234,8 @@ impl CommandParser {
             lifted: true,
         };
         let data = serde_json::to_string(&commands).context("Failed to serialize doc")?;
-        let response = Client::send_request(data);
-        match Client::match_response(response) {
+        let response = Client::send_request(data, framed);
+        match Client::match_response(response, framed) {
             Ok(res) => {
                 let doc = res.as_str().context("doc result not a string")?;
                 Self::parse_docstring(doc, args, short)
@@ -478,6 +488,7 @@ mod tests {
             Some("info".into()),
             None,
             false,
+            true, // use framing for coverage env
         )
         .unwrap();
         if let CommandAction::Execute(p) = action {
@@ -489,16 +500,16 @@ mod tests {
 
         // Help action
         let action_help =
-            CommandParser::from_params(None, Some("help".into()), None, false).unwrap();
+            CommandParser::from_params(None, Some("help".into()), None, false, true).unwrap();
         assert!(matches!(action_help, CommandAction::Help(_)));
 
         // Implicit help (no function)
-        let action_no_func = CommandParser::from_params(None, None, None, false).unwrap();
+        let action_no_func = CommandParser::from_params(None, None, None, false, true).unwrap();
         assert!(matches!(action_no_func, CommandAction::Help(_)));
 
         // Info action
         let action_info =
-            CommandParser::from_params(None, Some("status".into()), None, true).unwrap();
+            CommandParser::from_params(None, Some("status".into()), None, true, true).unwrap();
         assert!(matches!(action_info, CommandAction::Help(_)));
     }
 
@@ -506,7 +517,7 @@ mod tests {
     #[ignore = "requires live Qtile socket"]
     fn test_command_parser_get_help() {
         // In the coverage env, qtile is running, so this should succeed.
-        let res = CommandParser::get_help(&[], None);
+        let res = CommandParser::get_help(&[], None, true);
         assert!(res.is_ok());
     }
 }

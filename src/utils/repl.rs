@@ -204,14 +204,14 @@ pub struct Repl {
 
 impl Default for Repl {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
 impl Repl {
-    pub fn new() -> Self {
+    pub fn new(_framed: bool) -> Self {
         Self {
-            client: QtileClient::new(),
+            client: QtileClient::new(_framed),
             current_object: vec!["root".to_string()],
         }
     }
@@ -228,8 +228,12 @@ impl Repl {
 
         loop {
             // Update helper with current state for completions
+            #[cfg(feature = "framing")]
+            let helper_framed = self.client.framed();
+            #[cfg(not(feature = "framing"))]
+            let helper_framed = false;
             let helper = QtileHelper {
-                client: QtileClient::new(),
+                client: QtileClient::new(helper_framed),
                 current_object: self.current_object.clone(),
             };
             rl.set_helper(Some(helper));
@@ -452,7 +456,7 @@ mod tests {
     #[test]
     fn test_get_active_path() {
         let helper = QtileHelper {
-            client: QtileClient::new(),
+            client: QtileClient::new(false),
             current_object: vec!["root".to_string()],
         };
 
@@ -474,7 +478,7 @@ mod tests {
     #[test]
     fn test_get_active_path_navigation() {
         let helper = QtileHelper {
-            client: QtileClient::new(),
+            client: QtileClient::new(false),
             current_object: vec!["root".to_string(), "group".to_string(), "1".to_string()],
         };
 
@@ -489,14 +493,19 @@ mod tests {
 
     #[test]
     fn test_repl_init() {
-        let repl = Repl::new();
+        let repl = Repl::new(true);
+        #[cfg(feature = "framing")]
+        assert!(repl.client.framed());
         assert_eq!(repl.current_object, vec!["root"]);
-        let _default_repl = Repl::default();
+
+        let default_repl = Repl::default();
+        #[cfg(feature = "framing")]
+        assert!(!default_repl.client.framed());
     }
 
     #[test]
     fn test_handle_line() {
-        let mut repl = Repl::new();
+        let mut repl = Repl::new(true);
         assert!(repl.handle_line("exit"));
         assert!(repl.handle_line("quit"));
         assert!(!repl.handle_line("ls"));
@@ -514,7 +523,7 @@ mod tests {
         use rustyline::history::DefaultHistory;
         use rustyline::Context;
         let helper = QtileHelper {
-            client: QtileClient::new(),
+            client: QtileClient::new(true),
             current_object: vec!["root".to_string()],
         };
         let history = DefaultHistory::new();
@@ -540,7 +549,7 @@ mod tests {
 
     #[test]
     fn test_handle_cd_complex() {
-        let mut repl = Repl::new();
+        let mut repl = Repl::new(true);
         repl.handle_cd(&["group"]);
         // cd /
         repl.handle_cd(&["/"]);
@@ -557,7 +566,7 @@ mod tests {
 
     #[test]
     fn test_handle_ls_complex() {
-        let repl = Repl::new();
+        let repl = Repl::new(true);
         // List root (default)
         assert!(repl.handle_ls(&[]).is_ok());
         // List specific class
@@ -572,7 +581,7 @@ mod tests {
 
     #[test]
     fn test_handle_line_navigation() {
-        let mut repl = Repl::new();
+        let mut repl = Repl::new(true);
         // cd built-in
         repl.handle_line("cd group");
         // .. built-in
@@ -586,7 +595,7 @@ mod tests {
 
     #[test]
     fn test_handle_call() {
-        let repl = Repl::new();
+        let repl = Repl::new(true);
         // This just prints, but we verify it doesn't panic
         repl.handle_call("status", &[]);
     }
@@ -597,7 +606,7 @@ mod tests {
         use rustyline::hint::Hinter;
 
         let helper = QtileHelper {
-            client: QtileClient::new(),
+            client: QtileClient::new(true),
             current_object: vec!["root".into()],
         };
 

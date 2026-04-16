@@ -18,7 +18,11 @@ pub(crate) fn run(args: Args) -> anyhow::Result<()> {
         .env()
         .init()
         .ok(); // Ignore re-init error in tests
-    let client = QtileClient::new();
+    #[cfg(feature = "framing")]
+    let framed = args.framed;
+    #[cfg(not(feature = "framing"))]
+    let framed = false;
+    let client = QtileClient::new(framed);
 
     match args.command {
         Commands::CmdObj {
@@ -49,7 +53,7 @@ pub(crate) fn run(args: Args) -> anyhow::Result<()> {
         }
         #[cfg(feature = "repl")]
         Commands::Repl => {
-            let mut repl = Repl::new();
+            let mut repl = Repl::new(framed);
             repl.run()
         }
     }
@@ -67,6 +71,8 @@ mod tests {
         std::env::set_var("DISPLAY", &_display);
 
         let args = Args {
+            #[cfg(feature = "framing")]
+            framed: true,
             command: Commands::CmdObj {
                 object: None,
                 function: Some("status".to_string()),
@@ -88,6 +94,8 @@ mod tests {
     #[test]
     fn test_run_invalid_object() {
         let args = Args {
+            #[cfg(feature = "framing")]
+            framed: true,
             command: Commands::CmdObj {
                 object: Some(vec!["nonexistent".to_string()]),
                 function: Some("info".to_string()),
@@ -103,6 +111,8 @@ mod tests {
     #[test]
     fn test_run_invalid_function() {
         let args = Args {
+            #[cfg(feature = "framing")]
+            framed: true,
             command: Commands::CmdObj {
                 object: None,
                 function: Some("nonexistent_func".to_string()),
@@ -118,13 +128,16 @@ mod tests {
     #[test]
     #[cfg(feature = "repl")]
     fn test_run_repl_init() {
-        let _repl = Repl::new();
+        // Just verify it creates the Repl object.
+        let _repl = Repl::new(true);
     }
 
     #[test]
     #[allow(irrefutable_let_patterns)]
     fn test_args_defaults() {
         let args = Args::default();
+        #[cfg(feature = "framing")]
+        assert!(!args.framed);
         if let Commands::CmdObj { function, .. } = args.command {
             assert_eq!(function, Some("help".to_string()));
         } else {
