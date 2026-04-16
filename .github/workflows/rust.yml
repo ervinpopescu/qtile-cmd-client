@@ -28,9 +28,8 @@ env:
   PKG_CONFIG_PATH: "/opt/hostedtoolcache/qtile-deps/wayland/install/lib/pkgconfig:/opt/hostedtoolcache/qtile-deps/wayland/install/share/pkgconfig"
   LD_LIBRARY_PATH: "/opt/hostedtoolcache/qtile-deps/wayland/install/lib"
   DEBIAN_FRONTEND: "noninteractive"
-  # Specific Qtile fork and branch for framing tests
-  QTILE_REPO: "https://github.com/Mikadore/qtile.git"
-  QTILE_BRANCH: "json_ipc"
+  QTILE_REPO: "https://github.com/qtile/qtile.git"
+  QTILE_BRANCH: "master"
 
 jobs:
   prepare:
