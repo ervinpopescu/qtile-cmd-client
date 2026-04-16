@@ -1,13 +1,14 @@
 use clap::{Parser, Subcommand};
 
 /// qtile-cmd-client (qticc) — fast Rust replacement for `qtile cmd-obj`
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Debug, Clone, Default)]
 #[command(version, about, long_about = None)]
 pub struct Args {
     #[command(subcommand)]
     /// Available CLI commands
     pub command: Commands,
 }
+
 /// Available CLI commands
 #[derive(Subcommand, Debug, Clone)]
 pub enum Commands {
@@ -49,4 +50,16 @@ pub enum Commands {
     /// Start an interactive REPL session.
     #[cfg(feature = "repl")]
     Repl,
+}
+
+impl Default for Commands {
+    fn default() -> Self {
+        Self::CmdObj {
+            object: None,
+            function: Some("help".to_string()),
+            args: None,
+            info: false,
+            json: false,
+        }
+    }
 }

@@ -10,6 +10,7 @@ export WLR_LIBINPUT_NO_DEVICES=1
 export WLR_RENDERER_ALLOW_SOFTWARE=1
 export WLR_RENDERER=pixman
 export logfile=qtile-py"$1".log
+export WAYLAND_DISPLAY=wayland-0
 
 # Set up cache for socket in a writable location
 export XDG_CACHE_HOME="/tmp/qtile-test-cache-$$"
@@ -33,7 +34,7 @@ timeout 30 bash -c 'while ! (qtile cmd-obj -f qtile_info &>/dev/null); do sleep 
 }
 
 # Run tests
-cargo test --lib -q -- --nocapture --show-output --test-threads "$(nproc)" || {
+cargo test --lib -q -- --nocapture --show-output --include-ignored --test-threads "$(nproc)" || {
   echo "--- QTILE LOG ON TEST FAILURE ---"
   cat "$logfile"
   echo "--- QTILE STDOUT/STDERR ON TEST FAILURE ---"
