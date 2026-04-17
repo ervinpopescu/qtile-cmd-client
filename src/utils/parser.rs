@@ -144,26 +144,33 @@ impl CommandParser {
         }
     }
 
+    /// Splits a raw Qtile docstring into `(signature, description)`.
+    fn split_docstring(doc: &str) -> anyhow::Result<(String, String)> {
+        let mut lines = doc.splitn(3, '\n');
+        let first = lines.next().unwrap_or("");
+        let desc = lines.next().unwrap_or("").trim().to_string();
+
+        let start = first.find('(').context("missing '(' in docstring")?;
+        let end = first.find(')').context("missing ')' in docstring")?;
+        let sig = first[start..end + 1].to_string();
+        Ok((sig, desc))
+    }
+
     /// Formats a raw Qtile docstring into a readable help line.
     fn parse_docstring(doc: &str, include_args: bool, short: bool) -> anyhow::Result<String> {
-        let doc_lines = doc.split('\n').collect_vec();
-        let tdoc = doc_lines[0].to_owned();
-        let start = tdoc.find('(').context("missing '(' in docstring")?;
-        let end = tdoc.find(')').context("missing ')' in docstring")?;
-
-        let mut doc_args = &tdoc[start..end + 1];
-        let short_desc: &str = if doc_lines.len() > 1 {
-            doc_lines[1]
-        } else {
+        let (sig, desc) = Self::split_docstring(doc)?;
+        let doc_args: &str = if !include_args {
             ""
-        };
-
-        if !include_args {
-            doc_args = "";
         } else if short {
-            doc_args = if doc_args == "()" { " " } else { "*" }
-        }
-        Ok(format!("{doc_args} {short_desc}"))
+            if sig == "()" {
+                " "
+            } else {
+                "*"
+            }
+        } else {
+            &sig
+        };
+        Ok(format!("{doc_args} {desc}"))
     }
 
     /// Batches documentation requests for multiple commands into a single 'eval' call for performance.
@@ -207,21 +214,20 @@ impl CommandParser {
             );
         }
 
-        let mut output: Vec<[String; 2]> = vec![];
+        let mut output: Vec<[String; 3]> = vec![];
         for (cmd, doc_str) in commands.iter().zip(docs.iter()) {
-            let formatted = Self::parse_docstring(doc_str, true, false)?;
-            output.push([format!("{prefix}{cmd}"), formatted]);
+            let (sig, desc) = Self::split_docstring(doc_str)?;
+            output.push([format!("{prefix}{cmd}"), sig, desc]);
         }
 
-        let max_cmd = output.iter().map(|[p, _]| p.len()).max().unwrap_or(0);
+        let max_cmd = output.iter().map(|r| r[0].len()).max().unwrap_or(0);
+        let indent = " ".repeat(max_cmd + 2);
         let mut help_str = String::new();
-        for line in output {
-            help_str.push_str(&format!(
-                "{:<width$}\t{}\n",
-                line[0],
-                line[1],
-                width = max_cmd
-            ));
+        for [cmd, sig, desc] in output {
+            help_str.push_str(&format!("{cmd:<max_cmd$}  {sig}\n"));
+            if !desc.is_empty() {
+                help_str.push_str(&format!("{indent}{desc}\n"));
+            }
         }
         Ok(help_str)
     }
