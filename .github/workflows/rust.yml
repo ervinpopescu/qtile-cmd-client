@@ -28,6 +28,9 @@ env:
   PKG_CONFIG_PATH: "/opt/hostedtoolcache/qtile-deps/wayland/install/lib/pkgconfig:/opt/hostedtoolcache/qtile-deps/wayland/install/share/pkgconfig"
   LD_LIBRARY_PATH: "/opt/hostedtoolcache/qtile-deps/wayland/install/lib"
   DEBIAN_FRONTEND: "noninteractive"
+  # Specific Qtile fork and branch for framing tests
+  QTILE_REPO: "https://github.com/Mikadore/qtile.git"
+  QTILE_BRANCH: "json_ipc"
 
 jobs:
   prepare:
@@ -75,8 +78,9 @@ jobs:
     name: Lint & Format (${{ matrix.rust }})
     needs: pre-commit
     runs-on: qtile
-    env:
-      RUSTC_WRAPPER: "sccache"
+    # NOTE: Lint is slower with sccache (~+10s) — overhead outweighs savings on short check/clippy runs
+    # env:
+    #   RUSTC_WRAPPER: "sccache"
     strategy:
       matrix:
         rust: [stable, nightly]
@@ -110,9 +114,8 @@ jobs:
     name: Test (Python ${{ matrix.python-version }}, Rust ${{ matrix.rust }})
     needs: lint
     runs-on: qtile
-    # NOTE: Lint is slower with sccache (~+10s) — overhead outweighs savings on short check/clippy runs
-    # env:
-    #   RUSTC_WRAPPER: "sccache"
+    env:
+      RUSTC_WRAPPER: "sccache"
     strategy:
       fail-fast: false
       matrix:
@@ -137,28 +140,15 @@ jobs:
 
       - name: Setup Python Dev Environment
         run: |
-          # 1. Ensure the specific python version is installed
           uv python install ${{ matrix.python-version }}
-
-          # 2. Find the path to the python binary
           PYTHON_BIN=$(uv python find ${{ matrix.python-version }})
-
-          # 3. Get the base directory (parent of the 'bin' folder)
           PY_DIR=$(dirname $(dirname "$PYTHON_BIN"))
-
-          # 4. Export paths for pkg-config and compiler
           echo "PKG_CONFIG_PATH=$PY_DIR/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
-
-          # 5. Extract the include path using the binary itself
           PY_INCLUDE=$($PYTHON_BIN -c "import sysconfig; print(sysconfig.get_path('include'))")
           echo "CFLAGS=-I$PY_INCLUDE" >> $GITHUB_ENV
 
-          # Debug output to verify
-          echo "Using Python at: $PYTHON_BIN"
-          echo "Include path: $PY_INCLUDE"
-
       - name: Install Qtile via uv
-        run: ./.github/scripts/install-qtile ${{ matrix.python-version }} https://github.com/qtile/qtile master
+        run: ./.github/scripts/install-qtile ${{ matrix.python-version }} ${{ env.QTILE_REPO }} ${{ env.QTILE_BRANCH }}
 
       - name: Start seatd
         run: |
@@ -169,6 +159,7 @@ jobs:
         run: ./.github/scripts/run-tests ${{ matrix.python-version }}
         env:
           XWAYLAND: ${{ env.WAYLAND_INSTALL_DIR }}/bin/Xwayland
+
       - name: Finalize sccache
         if: always() # Ensures it stops even if tests fail
         run: |
@@ -209,7 +200,7 @@ jobs:
           echo "CFLAGS=-I$PY_INCLUDE" >> $GITHUB_ENV
 
       - name: Install Qtile via uv
-        run: ./.github/scripts/install-qtile 3.12 https://github.com/qtile/qtile master
+        run: ./.github/scripts/install-qtile 3.12 ${{ env.QTILE_REPO }} ${{ env.QTILE_BRANCH }}
 
       - name: Start seatd
         run: |
