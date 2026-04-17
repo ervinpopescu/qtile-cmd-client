@@ -209,7 +209,7 @@ impl CommandParser {
 
         let mut output: Vec<[String; 2]> = vec![];
         for (cmd, doc_str) in commands.iter().zip(docs.iter()) {
-            let formatted = Self::parse_docstring(doc_str, true, true)?;
+            let formatted = Self::parse_docstring(doc_str, true, false)?;
             output.push([format!("{prefix}{cmd}"), formatted]);
         }
 
