@@ -1,17 +1,232 @@
 use crate::utils::client::{CallResult, CommandQuery, QtileClient};
 use rustyline::completion::{Completer, Pair};
+use rustyline::config::BellStyle;
 use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
-use rustyline::hint::Hinter;
+use rustyline::hint::{Hint, Hinter};
 use rustyline::history::DefaultHistory;
 use rustyline::validate::Validator;
-use rustyline::{CompletionType, Config, Context, Editor, Helper};
+use rustyline::{ColorMode, CompletionType, Config, Context, EditMode, Editor, Helper};
 use serde_json::Value;
 use std::borrow::Cow;
+use std::path::PathBuf;
+
+// ── Config ──────────────────────────────────────────────────────────────────
+
+/// Persistent REPL configuration loaded from `$XDG_CONFIG_HOME/qticc/config.toml`.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default)]
+pub struct ReplConfig {
+    pub completion: CompletionConfig,
+    pub history: HistoryConfig,
+    pub editor: EditorConfig,
+    pub display: DisplayConfig,
+}
+
+// ── [completion] ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(default)]
+pub struct CompletionConfig {
+    /// Matching mode: `"prefix"` (default) or `"fuzzy"`.
+    pub mode: String,
+    /// Maximum number of mismatched characters tolerated in fuzzy mode (default 1).
+    pub max_errors: usize,
+}
+
+impl Default for CompletionConfig {
+    fn default() -> Self {
+        Self {
+            mode: "prefix".to_string(),
+            max_errors: 1,
+        }
+    }
+}
+
+// ── [history] ────────────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(default)]
+pub struct HistoryConfig {
+    /// Maximum number of history entries to keep (default 1000).
+    pub max_size: usize,
+    /// Ignore consecutive duplicate entries (default true).
+    pub ignore_duplicates: bool,
+    /// Ignore entries that begin with a space (default false).
+    pub ignore_space: bool,
+}
+
+impl Default for HistoryConfig {
+    fn default() -> Self {
+        Self {
+            max_size: 1000,
+            ignore_duplicates: true,
+            ignore_space: false,
+        }
+    }
+}
+
+// ── [editor] ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(default)]
+pub struct EditorConfig {
+    /// Key binding mode: `"emacs"` (default) or `"vi"`.
+    pub mode: String,
+    /// Bell style: `"none"` (default), `"audible"`, or `"visible"`.
+    pub bell: String,
+    /// Show inline hints for uniquely-matched commands (default true).
+    pub hints: bool,
+}
+
+impl Default for EditorConfig {
+    fn default() -> Self {
+        Self {
+            mode: "emacs".to_string(),
+            bell: "none".to_string(),
+            hints: true,
+        }
+    }
+}
+
+// ── [display] ────────────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(default)]
+pub struct DisplayConfig {
+    /// Terminal width used for `ls` column layout (default 80).
+    pub terminal_width: usize,
+}
+
+impl Default for DisplayConfig {
+    fn default() -> Self {
+        Self { terminal_width: 80 }
+    }
+}
+
+impl ReplConfig {
+    /// Load from `$XDG_CONFIG_HOME/qticc/config.toml` (or `~/.config/qticc/config.toml`).
+    /// Missing file is silently ignored; parse errors are reported but do not abort.
+    pub fn load() -> Self {
+        let path = {
+            let base = std::env::var("XDG_CONFIG_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| {
+                    std::env::var("HOME")
+                        .map(|h| PathBuf::from(h).join(".config"))
+                        .unwrap_or_else(|_| PathBuf::from("."))
+                });
+            base.join("qticc/config.toml")
+        };
+
+        match std::fs::read_to_string(&path) {
+            Ok(text) => toml::from_str(&text).unwrap_or_else(|e| {
+                eprintln!("qticc: config parse error in {}: {e}", path.display());
+                Self::default()
+            }),
+            Err(_) => Self::default(),
+        }
+    }
+
+    pub fn completion_mode(&self) -> CompletionMode {
+        match self.completion.mode.to_ascii_lowercase().as_str() {
+            "fuzzy" => CompletionMode::Fuzzy {
+                max_errors: self.completion.max_errors,
+            },
+            _ => CompletionMode::Prefix,
+        }
+    }
+
+    pub fn edit_mode(&self) -> EditMode {
+        match self.editor.mode.to_ascii_lowercase().as_str() {
+            "vi" | "vim" => EditMode::Vi,
+            _ => EditMode::Emacs,
+        }
+    }
+
+    pub fn bell_style(&self) -> BellStyle {
+        match self.editor.bell.to_ascii_lowercase().as_str() {
+            "audible" => BellStyle::Audible,
+            "visible" => BellStyle::Visible,
+            _ => BellStyle::None,
+        }
+    }
+}
+
+// ── CompletionMode ───────────────────────────────────────────────────────────
+
+/// Controls how typed input is matched against completion candidates.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum CompletionMode {
+    /// Only candidates that start with the typed prefix are shown (default).
+    #[default]
+    Prefix,
+    /// Subsequence match: all typed chars must appear in order; up to `max_errors`
+    /// typed chars may fail to match (tolerates typos / transpositions).
+    Fuzzy { max_errors: usize },
+}
+
+impl CompletionMode {
+    /// Returns true if `word` matches `candidate` under this mode.
+    pub fn matches(self, candidate: &str, word: &str) -> bool {
+        match self {
+            Self::Prefix => candidate.starts_with(word),
+            Self::Fuzzy { max_errors } => fuzzy_match(candidate, word, max_errors),
+        }
+    }
+}
+
+/// Subsequence fuzzy match: typed chars must appear in order in `candidate`.
+/// Up to `max_errors` typed chars from the pattern may be absent; on a miss the
+/// candidate position is NOT advanced, so the next pattern char tries from the same spot.
+fn fuzzy_match(candidate: &str, pattern: &str, max_errors: usize) -> bool {
+    if pattern.is_empty() {
+        return true;
+    }
+    let cand: Vec<u8> = candidate.to_ascii_lowercase().into_bytes();
+    let pat: Vec<u8> = pattern.to_ascii_lowercase().into_bytes();
+    let mut errors = 0usize;
+    let mut ci = 0usize;
+    for &pc in &pat {
+        match cand[ci..].iter().position(|&cc| cc == pc) {
+            Some(offset) => ci += offset + 1,
+            None => {
+                errors += 1;
+                if errors > max_errors {
+                    return false;
+                }
+                // don't advance ci — try next pattern char from same position
+            }
+        }
+    }
+    true
+}
+
+// ── CommandHint ──────────────────────────────────────────────────────────────
+
+/// Hint that displays signature+description as ghost text but only inserts the
+/// name suffix on accept (right arrow / End).
+struct CommandHint {
+    display: String,
+    completion: String,
+}
+
+impl Hint for CommandHint {
+    fn display(&self) -> &str {
+        &self.display
+    }
+    fn completion(&self) -> Option<&str> {
+        Some(&self.completion)
+    }
+}
+
+// ── QtileHelper ──────────────────────────────────────────────────────────────
 
 struct QtileHelper {
     client: QtileClient,
     current_object: Vec<String>,
+    completion_mode: CompletionMode,
+    hints: bool,
 }
 
 impl QtileHelper {
@@ -79,57 +294,24 @@ impl Completer for QtileHelper {
         };
 
         let active_path = self.get_active_path(navigation_parts);
+        let mode = self.completion_mode;
 
-        // 1. Commands with inline short doc (one batched eval call)
+        // 1. Commands — name only in display so multi-column layout fits without paging
         if !is_cd {
             let query = CommandQuery::new()
                 .object(active_path.clone())
                 .function("commands".to_string());
 
             if let Ok(CallResult::Value(Value::Array(cmds))) = self.client.call(query) {
-                let matching: Vec<String> = cmds
-                    .iter()
-                    .filter_map(|v| v.as_str())
-                    .filter(|s| s.starts_with(word))
-                    .map(|s| s.to_string())
-                    .collect();
-
-                // Batch-fetch short docs for all matching commands in one eval call
-                let docs: Vec<String> = if !matching.is_empty() {
-                    let sep = "\u{0001}";
-                    let eval_cmd = format!("'{sep}'.join([self.doc(cmd) for cmd in {matching:?}])");
-                    let eval_query = CommandQuery::new()
-                        .object(active_path.clone())
-                        .function("eval".to_string())
-                        .args(vec![eval_cmd]);
-
-                    if let Ok(CallResult::Value(Value::String(s))) = self.client.call(eval_query) {
-                        s.split(sep)
-                            .map(|doc| {
-                                // Extract first line up to ')', trim leading whitespace
-                                let line = doc.lines().next().unwrap_or("").trim();
-                                let start = line.find('(').unwrap_or(0);
-                                let end = line.find(')').map(|i| i + 1).unwrap_or(line.len());
-                                line[start..end].trim().to_string()
-                            })
-                            .collect()
-                    } else {
-                        vec![String::new(); matching.len()]
+                for v in &cmds {
+                    if let Some(name) = v.as_str() {
+                        if mode.matches(name, word) {
+                            candidates.push(Pair {
+                                display: name.to_string(),
+                                replacement: name.to_string(),
+                            });
+                        }
                     }
-                } else {
-                    vec![]
-                };
-
-                for (name, doc) in matching.iter().zip(docs.iter()) {
-                    let display = if doc.is_empty() {
-                        name.clone()
-                    } else {
-                        format!("{name:<20} {doc}")
-                    };
-                    candidates.push(Pair {
-                        display,
-                        replacement: name.clone(),
-                    });
                 }
             }
         }
@@ -155,7 +337,7 @@ impl Completer for QtileHelper {
                                 Value::Number(n) => n.to_string(),
                                 _ => continue,
                             };
-                            if inst_str.starts_with(word) {
+                            if mode.matches(&inst_str, word) {
                                 candidates.push(Pair {
                                     display: inst_str.clone(),
                                     replacement: inst_str,
@@ -167,7 +349,7 @@ impl Completer for QtileHelper {
             }
         } else {
             for (name, doc) in ITEM_CLASSES {
-                if name.starts_with(word) {
+                if mode.matches(name, word) {
                     candidates.push(Pair {
                         display: format!("{name:<20} {doc}"),
                         replacement: name.to_string(),
@@ -184,7 +366,66 @@ impl Completer for QtileHelper {
 }
 
 impl Hinter for QtileHelper {
-    type Hint = String;
+    type Hint = CommandHint;
+
+    fn hint(&self, line: &str, pos: usize, _ctx: &Context<'_>) -> Option<CommandHint> {
+        if !self.hints || pos < line.len() {
+            return None;
+        }
+        let word = line.split_whitespace().last()?;
+        if word.is_empty() {
+            return None;
+        }
+
+        let query = CommandQuery::new()
+            .object(self.current_object.clone())
+            .function("commands".to_string());
+        let cmds = match self.client.call(query) {
+            Ok(CallResult::Value(Value::Array(a))) => a,
+            _ => return None,
+        };
+
+        let matches: Vec<&str> = cmds
+            .iter()
+            .filter_map(|v| v.as_str())
+            .filter(|s| s.starts_with(word))
+            .collect();
+
+        if matches.len() != 1 {
+            return None; // only hint on a unique match
+        }
+
+        let cmd = matches[0];
+        let suffix = &cmd[word.len()..];
+
+        let doc_query = CommandQuery::new()
+            .object(self.current_object.clone())
+            .function("doc".to_string())
+            .args(vec![cmd.to_string()]);
+
+        if let Ok(CallResult::Value(Value::String(doc))) = self.client.call(doc_query) {
+            let first_line = doc.lines().next().unwrap_or("").trim();
+            let sig_start = first_line.find('(')?;
+            let sig = &first_line[sig_start..];
+            let desc = doc.lines().nth(1).unwrap_or("").trim();
+            let doc_part = if desc.is_empty() {
+                format!("  {sig}")
+            } else {
+                format!("  {sig}  —  {desc}")
+            };
+            Some(CommandHint {
+                display: format!("{suffix}{doc_part}"),
+                completion: suffix.to_string(),
+            })
+        } else if !suffix.is_empty() {
+            Some(CommandHint {
+                display: suffix.to_string(),
+                completion: suffix.to_string(),
+            })
+        } else {
+            None
+        }
+    }
 }
 
 impl Highlighter for QtileHelper {
@@ -218,10 +459,14 @@ impl Validator for QtileHelper {}
 
 impl Helper for QtileHelper {}
 
+// ── Repl ─────────────────────────────────────────────────────────────────────
+
 /// Interactive shell for navigating the Qtile command graph and invoking functions.
 pub struct Repl {
     pub(crate) client: QtileClient,
     pub(crate) current_object: Vec<String>,
+    pub(crate) completion_mode: CompletionMode,
+    pub(crate) cfg: ReplConfig,
 }
 
 impl Default for Repl {
@@ -232,19 +477,45 @@ impl Default for Repl {
 
 impl Repl {
     pub fn new() -> Self {
+        let cfg = ReplConfig::load();
+        let completion_mode = cfg.completion_mode();
         Self {
             client: QtileClient::new(),
             current_object: vec!["root".to_string()],
+            completion_mode,
+            cfg,
         }
+    }
+
+    fn history_path() -> PathBuf {
+        let base = std::env::var("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                std::env::var("HOME")
+                    .map(|h| PathBuf::from(h).join(".local/state"))
+                    .unwrap_or_else(|_| PathBuf::from("."))
+            });
+        base.join("qticc/history")
     }
 
     /// Starts the interactive REPL loop.
     pub fn run(&mut self) -> anyhow::Result<()> {
-        let config = Config::builder()
+        let rl_config = Config::builder()
             .completion_type(CompletionType::List)
-            .completion_prompt_limit(40)
+            .completion_show_all_if_ambiguous(true)
+            .edit_mode(self.cfg.edit_mode())
+            .bell_style(self.cfg.bell_style())
+            .color_mode(ColorMode::Enabled)
+            .max_history_size(self.cfg.history.max_size)?
+            .history_ignore_dups(self.cfg.history.ignore_duplicates)?
+            .history_ignore_space(self.cfg.history.ignore_space)
             .build();
-        let mut rl: Editor<QtileHelper, DefaultHistory> = Editor::with_config(config)?;
+        let mut rl: Editor<QtileHelper, DefaultHistory> = Editor::with_config(rl_config)?;
+        let history_path = Self::history_path();
+        if let Some(parent) = history_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = rl.load_history(&history_path);
 
         println!("Qtile REPL - type 'exit' or 'quit' to leave, 'help' for current object help.");
         println!("Use 'cd <object>' to move through the command graph.");
@@ -254,6 +525,8 @@ impl Repl {
             let helper = QtileHelper {
                 client: QtileClient::new(),
                 current_object: self.current_object.clone(),
+                completion_mode: self.completion_mode,
+                hints: self.cfg.editor.hints,
             };
             rl.set_helper(Some(helper));
 
@@ -285,6 +558,7 @@ impl Repl {
                 }
             }
         }
+        let _ = rl.save_history(&history_path);
         Ok(())
     }
 
@@ -434,7 +708,7 @@ impl Repl {
             println!("(none)");
         } else {
             let max_width = items.iter().map(|i| i.len()).max().unwrap_or(0) + 2;
-            let terminal_width = 80;
+            let terminal_width = self.cfg.display.terminal_width;
             let cols = (terminal_width / max_width).max(1);
 
             for (idx, item) in items.iter().enumerate() {
@@ -455,42 +729,42 @@ impl Repl {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_get_active_path() {
-        let helper = QtileHelper {
+    fn helper() -> QtileHelper {
+        QtileHelper {
             client: QtileClient::new(),
             current_object: vec!["root".to_string()],
-        };
+            completion_mode: CompletionMode::default(),
+            hints: true,
+        }
+    }
 
+    #[test]
+    fn test_get_active_path() {
+        let h = helper();
+        assert_eq!(h.get_active_path(&["cd", "group"]), vec!["root", "group"]);
         assert_eq!(
-            helper.get_active_path(&["cd", "group"]),
-            vec!["root", "group"]
-        );
-        assert_eq!(
-            helper.get_active_path(&["cd", "group", "1"]),
+            h.get_active_path(&["cd", "group", "1"]),
             vec!["root", "group", "1"]
         );
-        assert_eq!(
-            helper.get_active_path(&["ls", "layout"]),
-            vec!["root", "layout"]
-        );
-        assert_eq!(helper.get_active_path(&["group"]), vec!["root", "group"]);
+        assert_eq!(h.get_active_path(&["ls", "layout"]), vec!["root", "layout"]);
+        assert_eq!(h.get_active_path(&["group"]), vec!["root", "group"]);
     }
 
     #[test]
     fn test_get_active_path_navigation() {
-        let helper = QtileHelper {
+        let h = QtileHelper {
             client: QtileClient::new(),
             current_object: vec!["root".to_string(), "group".to_string(), "1".to_string()],
+            completion_mode: CompletionMode::default(),
+            hints: true,
         };
-
-        assert_eq!(helper.get_active_path(&[".."]), vec!["root", "group"]);
-        assert_eq!(helper.get_active_path(&["cd", ".."]), vec!["root", "group"]);
+        assert_eq!(h.get_active_path(&[".."]), vec!["root", "group"]);
+        assert_eq!(h.get_active_path(&["cd", ".."]), vec!["root", "group"]);
         assert_eq!(
-            helper.get_active_path(&["cd", "layout"]),
+            h.get_active_path(&["cd", "layout"]),
             vec!["root", "group", "1", "layout"]
         );
-        assert_eq!(helper.get_active_path(&["cd", "/"]), vec!["root"]);
+        assert_eq!(h.get_active_path(&["cd", "/"]), vec!["root"]);
     }
 
     #[test]
@@ -519,28 +793,21 @@ mod tests {
     fn test_complete() {
         use rustyline::history::DefaultHistory;
         use rustyline::Context;
-        let helper = QtileHelper {
-            client: QtileClient::new(),
-            current_object: vec!["root".to_string()],
-        };
+        let h = helper();
         let history = DefaultHistory::new();
         let context = Context::new(&history);
 
-        // Standard completion at root
-        let (pos, candidates) = helper.complete("sta", 3, &context).unwrap();
+        let (pos, candidates) = h.complete("sta", 3, &context).unwrap();
         assert_eq!(pos, 0);
-        // Fallback if qtile is not running, but in coverage env it is
         if !candidates.is_empty() {
             assert!(candidates.iter().any(|c| c.replacement == "status"));
         }
 
-        // cd completion
-        let (pos, candidates) = helper.complete("cd gro", 6, &context).unwrap();
+        let (pos, candidates) = h.complete("cd gro", 6, &context).unwrap();
         assert_eq!(pos, 3);
         assert!(candidates.iter().any(|c| c.replacement == "group"));
 
-        // Completion inside a class
-        let (pos, _candidates) = helper.complete("cd group ", 9, &context).unwrap();
+        let (pos, _candidates) = h.complete("cd group ", 9, &context).unwrap();
         assert_eq!(pos, 9);
     }
 
@@ -558,7 +825,6 @@ mod tests {
 
     #[test]
     fn test_ls_items_at_instance_returns_classes() {
-        // Path ending with a specific instance (not an item_class) → same as root
         let repl = Repl::new();
         let path: Vec<String> = ["root", "group", "www"]
             .iter()
@@ -584,13 +850,11 @@ mod tests {
     #[ignore = "requires live Qtile socket"]
     fn test_ls_items_item_class_returns_instances() {
         let repl = Repl::new();
-        // screen must have at least one instance (screen 0) in any running qtile
         let items = repl.ls_items(&["root".to_string(), "screen".to_string()]);
         assert!(
             !items.is_empty(),
             "screen should have at least one instance"
         );
-        // All returned items should be valid screen indices (numbers) or names
         for item in &items {
             assert!(!item.is_empty());
         }
@@ -608,20 +872,15 @@ mod tests {
     fn test_complete_cd_at_root_shows_classes_not_commands() {
         use rustyline::history::DefaultHistory;
         use rustyline::Context;
-        let helper = QtileHelper {
-            client: QtileClient::new(),
-            current_object: vec!["root".to_string()],
-        };
+        let h = helper();
         let history = DefaultHistory::new();
         let ctx = Context::new(&history);
 
-        // `cd ` → only item_classes offered (no commands like "status", "eval", etc.)
-        let (_, candidates) = helper.complete("cd ", 3, &ctx).unwrap();
+        let (_, candidates) = h.complete("cd ", 3, &ctx).unwrap();
         let names: Vec<&str> = candidates.iter().map(|c| c.replacement.as_str()).collect();
         for class in &["bar", "group", "layout", "screen", "window", "widget"] {
             assert!(names.contains(class), "expected {class} in cd candidates");
         }
-        // Commands should NOT appear in cd completion
         assert!(
             !names.contains(&"status"),
             "commands must not appear in cd completion"
@@ -636,16 +895,11 @@ mod tests {
     fn test_complete_no_cd_shows_commands() {
         use rustyline::history::DefaultHistory;
         use rustyline::Context;
-        let helper = QtileHelper {
-            client: QtileClient::new(),
-            current_object: vec!["root".to_string()],
-        };
+        let h = helper();
         let history = DefaultHistory::new();
         let ctx = Context::new(&history);
 
-        // Plain `sta` → commands like "status" (if qtile running) plus item_classes
-        let (_, candidates) = helper.complete("sta", 3, &ctx).unwrap();
-        // item_classes starting with "sta" — none, so if qtile is up "status" must be there
+        let (_, candidates) = h.complete("sta", 3, &ctx).unwrap();
         if !candidates.is_empty() {
             assert!(
                 candidates.iter().any(|c| c.replacement == "status"),
@@ -658,15 +912,11 @@ mod tests {
     fn test_complete_prefix_filtering() {
         use rustyline::history::DefaultHistory;
         use rustyline::Context;
-        let helper = QtileHelper {
-            client: QtileClient::new(),
-            current_object: vec!["root".to_string()],
-        };
+        let h = helper();
         let history = DefaultHistory::new();
         let ctx = Context::new(&history);
 
-        // `cd gr` → only "group" from item_classes matches
-        let (_, candidates) = helper.complete("cd gr", 5, &ctx).unwrap();
+        let (_, candidates) = h.complete("cd gr", 5, &ctx).unwrap();
         let names: Vec<&str> = candidates.iter().map(|c| c.replacement.as_str()).collect();
         assert!(names.contains(&"group"));
         assert!(!names.contains(&"screen"));
@@ -677,15 +927,11 @@ mod tests {
     fn test_complete_dedup() {
         use rustyline::history::DefaultHistory;
         use rustyline::Context;
-        let helper = QtileHelper {
-            client: QtileClient::new(),
-            current_object: vec!["root".to_string()],
-        };
+        let h = helper();
         let history = DefaultHistory::new();
         let ctx = Context::new(&history);
 
-        // No duplicate candidates
-        let (_, candidates) = helper.complete("cd ", 3, &ctx).unwrap();
+        let (_, candidates) = h.complete("cd ", 3, &ctx).unwrap();
         let names: Vec<&str> = candidates.iter().map(|c| c.replacement.as_str()).collect();
         let mut sorted = names.clone();
         sorted.dedup();
@@ -696,14 +942,11 @@ mod tests {
     fn test_complete_sorted() {
         use rustyline::history::DefaultHistory;
         use rustyline::Context;
-        let helper = QtileHelper {
-            client: QtileClient::new(),
-            current_object: vec!["root".to_string()],
-        };
+        let h = helper();
         let history = DefaultHistory::new();
         let ctx = Context::new(&history);
 
-        let (_, candidates) = helper.complete("cd ", 3, &ctx).unwrap();
+        let (_, candidates) = h.complete("cd ", 3, &ctx).unwrap();
         let names: Vec<&str> = candidates.iter().map(|c| c.replacement.as_str()).collect();
         let mut sorted = names.clone();
         sorted.sort();
@@ -712,10 +955,8 @@ mod tests {
 
     #[test]
     fn test_handle_cd_empty_args() {
-        // cd with no args should not panic and path should stay the same
         let mut repl = Repl::new();
         repl.handle_cd(&[]);
-        // path unchanged (handle_cd calls handle_ls which prints but doesn't change path)
         assert_eq!(repl.current_object, vec!["root"]);
     }
 
@@ -725,7 +966,6 @@ mod tests {
         repl.current_object = vec!["root".into(), "group".into()];
         assert!(!repl.handle_line(".."));
         assert_eq!(repl.current_object, vec!["root"]);
-        // .. at root stays at root
         assert!(!repl.handle_line(".."));
         assert_eq!(repl.current_object, vec!["root"]);
     }
@@ -734,53 +974,71 @@ mod tests {
     fn test_handle_cd_complex() {
         let mut repl = Repl::new();
         repl.handle_cd(&["group"]);
-        // cd /
         repl.handle_cd(&["/"]);
         assert_eq!(repl.current_object, vec!["root"]);
-        // cd root
         repl.handle_cd(&["root"]);
         assert_eq!(repl.current_object, vec!["root"]);
-        // cd .. at root
         repl.handle_cd(&[".."]);
         assert_eq!(repl.current_object, vec!["root"]);
-        // cd with multiple parts
         repl.handle_cd(&["group", "1"]);
     }
 
     #[test]
     fn test_handle_ls_complex() {
         let repl = Repl::new();
-        // List root (default)
         assert!(repl.handle_ls(&[]).is_ok());
-        // List specific class
         assert!(repl.handle_ls(&["group"]).is_ok());
-        // List parent
         assert!(repl.handle_ls(&[".."]).is_ok());
-        // List root explicitly
         assert!(repl.handle_ls(&["/"]).is_ok());
-        // List specific group (may or may not exist, but exercises logic)
         let _ = repl.handle_ls(&["group", "1"]);
     }
 
     #[test]
     fn test_handle_line_navigation() {
         let mut repl = Repl::new();
-        // cd built-in
         repl.handle_line("cd group");
-        // .. built-in
         repl.handle_line("..");
         assert_eq!(repl.current_object, vec!["root"]);
-        // ls built-in
         repl.handle_line("ls");
-        // exit built-in
         assert!(repl.handle_line("exit"));
     }
 
     #[test]
     fn test_handle_call() {
         let repl = Repl::new();
-        // This just prints, but we verify it doesn't panic
         repl.handle_call("status", &[]);
+    }
+
+    #[test]
+    fn test_fuzzy_match() {
+        // Exact subsequence (0 errors)
+        assert!(fuzzy_match("focus_back", "focus", 0));
+        assert!(fuzzy_match("focus_back", "fcus", 0)); // valid subsequence: f→f c→c u→u s→s
+                                                       // Non-subsequence character forces an error
+        assert!(!fuzzy_match("status", "stxatus", 0)); // 'x' not in remaining "atus"
+        assert!(fuzzy_match("status", "stxatus", 1)); // 1 error allowed
+        assert!(fuzzy_match("focus_back", "focs", 1));
+        assert!(fuzzy_match("status", "statxs", 1));
+        assert!(!fuzzy_match("status", "xxxxx", 1));
+        assert!(fuzzy_match("", "", 0));
+        assert!(fuzzy_match("anything", "", 0));
+    }
+
+    #[test]
+    fn test_completion_mode_prefix() {
+        let mode = CompletionMode::Prefix;
+        assert!(mode.matches("focus_back", "focus"));
+        assert!(!mode.matches("focus_back", "fcus"));
+        assert!(mode.matches("status", "sta"));
+        assert!(!mode.matches("status", "tatus"));
+    }
+
+    #[test]
+    fn test_completion_mode_fuzzy() {
+        let mode = CompletionMode::Fuzzy { max_errors: 1 };
+        assert!(mode.matches("focus_back", "focus"));
+        assert!(mode.matches("focus_back", "fcus")); // 1 error
+        assert!(!mode.matches("focus_back", "xyz")); // too many errors
     }
 
     #[test]
@@ -788,32 +1046,21 @@ mod tests {
         use rustyline::highlight::Highlighter;
         use rustyline::hint::Hinter;
 
-        let helper = QtileHelper {
-            client: QtileClient::new(),
-            current_object: vec!["root".into()],
-        };
+        let h = helper();
 
-        // Hinter
-        assert_eq!(
-            helper.hint(
+        // Hinter returns None for non-unique / no-Qtile
+        assert!(h
+            .hint(
                 "test",
                 4,
                 &Context::new(&rustyline::history::DefaultHistory::new())
-            ),
-            None
-        );
+            )
+            .is_none());
 
         // Highlighter
-        assert_eq!(
-            helper.highlight_prompt("prompt", true),
-            Cow::Borrowed("prompt")
-        );
-        assert_eq!(helper.highlight_hint("hint"), Cow::Borrowed("hint"));
-        assert_eq!(helper.highlight("line", 0), Cow::Borrowed("line"));
-        assert!(helper.highlight_char("line", 0, rustyline::highlight::CmdKind::Other));
-
-        // Validator
-        // Note: ValidationContext::new is private in newer rustyline.
-        // Since we use the default empty implementation, we don't need to test it here.
+        assert_eq!(h.highlight_prompt("prompt", true), Cow::Borrowed("prompt"));
+        assert_eq!(h.highlight_hint("hint"), Cow::Borrowed("hint"));
+        assert_eq!(h.highlight("line", 0), Cow::Borrowed("line"));
+        assert!(h.highlight_char("line", 0, rustyline::highlight::CmdKind::Other));
     }
 }
