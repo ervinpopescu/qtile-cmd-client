@@ -63,3 +63,82 @@ impl Default for Commands {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn test_parse_function_flag() {
+        let args = Args::try_parse_from(["qticc", "cmd-obj", "-f", "status"]).unwrap();
+        match args.command {
+            Commands::CmdObj { function, .. } => assert_eq!(function, Some("status".into())),
+            #[cfg(feature = "repl")]
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_object_and_function() {
+        let args =
+            Args::try_parse_from(["qticc", "cmd-obj", "-o", "group", "1", "-f", "info"]).unwrap();
+        match args.command {
+            Commands::CmdObj {
+                object, function, ..
+            } => {
+                assert_eq!(object, Some(vec!["group".into(), "1".into()]));
+                assert_eq!(function, Some("info".into()));
+            }
+            #[cfg(feature = "repl")]
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_info_flag() {
+        let args = Args::try_parse_from(["qticc", "cmd-obj", "-f", "status", "--info"]).unwrap();
+        match args.command {
+            Commands::CmdObj { info, .. } => assert!(info),
+            #[cfg(feature = "repl")]
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_json_flag() {
+        let args = Args::try_parse_from(["qticc", "cmd-obj", "-f", "status", "--json"]).unwrap();
+        match args.command {
+            Commands::CmdObj { json, .. } => assert!(json),
+            #[cfg(feature = "repl")]
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_args_flag() {
+        let args =
+            Args::try_parse_from(["qticc", "cmd-obj", "-f", "spawn", "-a", "xterm"]).unwrap();
+        match args.command {
+            Commands::CmdObj { args, .. } => assert_eq!(args, Some(vec!["xterm".into()])),
+            #[cfg(feature = "repl")]
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_default_function_is_help() {
+        // The default function must stay "help" — it determines what cmd-obj shows with no flags
+        let args = Args::default();
+        match args.command {
+            Commands::CmdObj { function, .. } => assert_eq!(function, Some("help".into())),
+            #[cfg(feature = "repl")]
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_unknown_subcommand_fails() {
+        assert!(Args::try_parse_from(["qticc", "not-a-command"]).is_err());
+    }
+}

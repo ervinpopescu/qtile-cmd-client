@@ -55,15 +55,21 @@ impl Completer for QtileHelper {
             .map(|(pre, word)| (pre.len() + 1, word))
             .unwrap_or((0, &line[..pos]));
 
+        const ITEM_CLASSES: &[(&str, &str)] = &[
+            ("bar", "widget bar on a screen"),
+            ("group", "workspace group"),
+            ("layout", "window layout"),
+            ("screen", "monitor screen"),
+            ("widget", "widget inside a bar"),
+            ("window", "managed window"),
+        ];
+
         let mut candidates = Vec::new();
-        let item_classes = vec!["layout", "group", "screen", "window", "bar", "widget"];
+        let item_class_names: Vec<&str> = ITEM_CLASSES.iter().map(|(n, _)| *n).collect();
 
         let all_parts: Vec<&str> = line[..pos].split_whitespace().collect();
         let is_cd = !all_parts.is_empty() && all_parts[0] == "cd";
 
-        // Determine the "base" object we are currently "at" in the typed line
-        // If the line ends with a space, we are looking for things INSIDE the last part.
-        // If not, we are looking for things INSIDE the penultimate part (or current_object).
         let navigation_parts = if line.ends_with(' ') {
             &all_parts[..]
         } else if all_parts.is_empty() {
@@ -74,64 +80,71 @@ impl Completer for QtileHelper {
 
         let active_path = self.get_active_path(navigation_parts);
 
-        // 1. Fetch available commands for the active path
+        // 1. Commands with inline short doc (one batched eval call)
         if !is_cd {
             let query = CommandQuery::new()
                 .object(active_path.clone())
                 .function("commands".to_string());
 
             if let Ok(CallResult::Value(Value::Array(cmds))) = self.client.call(query) {
-                for cmd in cmds {
-                    if let Some(cmd_str) = cmd.as_str() {
-                        if cmd_str.starts_with(word) {
-                            candidates.push(Pair {
-                                display: cmd_str.to_string(),
-                                replacement: cmd_str.to_string(),
-                            });
-                        }
+                let matching: Vec<String> = cmds
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .filter(|s| s.starts_with(word))
+                    .map(|s| s.to_string())
+                    .collect();
+
+                // Batch-fetch short docs for all matching commands in one eval call
+                let docs: Vec<String> = if !matching.is_empty() {
+                    let sep = "\u{0001}";
+                    let eval_cmd = format!("'{sep}'.join([self.doc(cmd) for cmd in {matching:?}])");
+                    let eval_query = CommandQuery::new()
+                        .object(active_path.clone())
+                        .function("eval".to_string())
+                        .args(vec![eval_cmd]);
+
+                    if let Ok(CallResult::Value(Value::String(s))) = self.client.call(eval_query) {
+                        s.split(sep)
+                            .map(|doc| {
+                                // Extract first line up to ')', trim leading whitespace
+                                let line = doc.lines().next().unwrap_or("").trim();
+                                let start = line.find('(').unwrap_or(0);
+                                let end = line.find(')').map(|i| i + 1).unwrap_or(line.len());
+                                line[start..end].trim().to_string()
+                            })
+                            .collect()
+                    } else {
+                        vec![String::new(); matching.len()]
                     }
+                } else {
+                    vec![]
+                };
+
+                for (name, doc) in matching.iter().zip(docs.iter()) {
+                    let display = if doc.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{name:<20} {doc}")
+                    };
+                    candidates.push(Pair {
+                        display,
+                        replacement: name.clone(),
+                    });
                 }
             }
         }
 
-        // 2. Fetch available sub-objects/item classes
-        for class in &item_classes {
-            if class.starts_with(word) {
-                candidates.push(Pair {
-                    display: class.to_string(),
-                    replacement: class.to_string(),
-                });
-            }
-        }
-
-        // 3. Fetch item instances if we just typed a class or are in one
-        // Check if navigation_parts ends with a class, or if active_path's last is a class
-        let mut class_to_query = None;
-        if let Some(last) = navigation_parts.last() {
-            if item_classes.contains(last) {
-                class_to_query = Some(last.to_string());
-            }
-        }
-
-        if class_to_query.is_none() {
-            if let Some(last) = active_path.last() {
-                if item_classes.contains(&last.as_str()) {
-                    class_to_query = Some(last.clone());
-                }
-            }
-        }
-
-        if let Some(class) = class_to_query {
-            // To get instances of 'class', we query 'items(class)' on its PARENT
+        // 2. Navigation candidates — same logic as handle_ls:
+        //    active_path ends with an item_class → offer instances (no description)
+        //    otherwise → offer item_classes with static descriptions
+        let active_last = active_path.last().map(|s| s.as_str()).unwrap_or("root");
+        if item_class_names.contains(&active_last) {
             let mut parent_path = active_path.clone();
-            if active_path.last() == Some(&class) {
-                parent_path.pop();
-            }
-
+            parent_path.pop();
             let query = CommandQuery::new()
                 .object(parent_path)
                 .function("items".to_string())
-                .args(vec![class]);
+                .args(vec![active_last.to_string()]);
 
             if let Ok(CallResult::Value(Value::Array(res))) = self.client.call(query) {
                 if res.len() >= 2 {
@@ -144,18 +157,27 @@ impl Completer for QtileHelper {
                             };
                             if inst_str.starts_with(word) {
                                 candidates.push(Pair {
-                                    display: inst_str.to_string(),
-                                    replacement: inst_str.to_string(),
+                                    display: inst_str.clone(),
+                                    replacement: inst_str,
                                 });
                             }
                         }
                     }
                 }
             }
+        } else {
+            for (name, doc) in ITEM_CLASSES {
+                if name.starts_with(word) {
+                    candidates.push(Pair {
+                        display: format!("{name:<20} {doc}"),
+                        replacement: name.to_string(),
+                    });
+                }
+            }
         }
 
-        candidates.sort_by(|a, b| a.display.cmp(&b.display));
-        candidates.dedup_by(|a, b| a.display == b.display);
+        candidates.sort_by(|a, b| a.replacement.cmp(&b.replacement));
+        candidates.dedup_by(|a, b| a.replacement == b.replacement);
 
         Ok((start, candidates))
     }
@@ -220,6 +242,7 @@ impl Repl {
     pub fn run(&mut self) -> anyhow::Result<()> {
         let config = Config::builder()
             .completion_type(CompletionType::List)
+            .completion_prompt_limit(40)
             .build();
         let mut rl: Editor<QtileHelper, DefaultHistory> = Editor::with_config(config)?;
 
@@ -351,6 +374,46 @@ impl Repl {
         }
     }
 
+    /// Returns the items to display for a given target path.
+    /// - Path ends with an item_class → instances of that class (from Qtile IPC)
+    /// - Otherwise → the fixed set of navigable node types
+    pub(crate) fn ls_items(&self, target_path: &[String]) -> Vec<String> {
+        const ITEM_CLASSES: &[&str] = &["layout", "group", "screen", "window", "bar", "widget"];
+
+        let last = target_path.last().map(|s| s.as_str()).unwrap_or("root");
+        let mut items = if ITEM_CLASSES.contains(&last) {
+            let mut parent = target_path.to_vec();
+            parent.pop();
+            let query = CommandQuery::new()
+                .object(parent)
+                .function("items".to_string())
+                .args(vec![last.to_string()]);
+
+            let mut instances = Vec::new();
+            if let Ok(CallResult::Value(Value::Array(res))) = self.client.call(query) {
+                if res.len() >= 2 {
+                    if let Value::Array(arr) = &res[1] {
+                        for inst in arr {
+                            let s = match inst {
+                                Value::String(s) => s.clone(),
+                                Value::Number(n) => n.to_string(),
+                                _ => continue,
+                            };
+                            instances.push(s);
+                        }
+                    }
+                }
+            }
+            instances
+        } else {
+            ITEM_CLASSES.iter().map(|s| s.to_string()).collect()
+        };
+
+        items.sort();
+        items.dedup();
+        items
+    }
+
     pub(crate) fn handle_ls(&self, args: &[&str]) -> anyhow::Result<()> {
         let mut target_path = self.current_object.clone();
         for &arg in args {
@@ -365,68 +428,11 @@ impl Repl {
             }
         }
 
-        let mut items = Vec::new();
-        let item_classes = vec!["layout", "group", "screen", "window", "bar", "widget"];
+        let items = self.ls_items(&target_path);
 
-        // 1. Fetch commands
-        let query = CommandQuery::new()
-            .object(target_path.clone())
-            .function("commands".to_string());
-        match self.client.call(query) {
-            Ok(CallResult::Value(Value::Array(cmds))) => {
-                for cmd in cmds {
-                    if let Some(s) = cmd.as_str() {
-                        items.push(s.to_string());
-                    }
-                }
-            }
-            Ok(_) => {} // Not an array, unexpected but skip
-            Err(e) => {
-                // If it's just 'root' or something valid, we shouldn't fail.
-                // But some paths might not support 'commands'.
-                if args.is_empty() {
-                    // Only report error if we are listing CURRENT and it fails
-                    println!("Warning: Could not fetch commands: {e}");
-                }
-            }
-        }
-
-        // 2. Add item classes
-        for class in &item_classes {
-            items.push(class.to_string());
-        }
-
-        // 3. If the target is an item class, add instances
-        if let Some(last) = target_path.last() {
-            if item_classes.contains(&last.as_str()) {
-                let mut parent = target_path.clone();
-                parent.pop();
-                let query = CommandQuery::new()
-                    .object(parent)
-                    .function("items".to_string())
-                    .args(vec![last.clone()]);
-
-                if let Ok(CallResult::Value(Value::Array(res))) = self.client.call(query) {
-                    if res.len() >= 2 {
-                        if let Value::Array(instances) = &res[1] {
-                            for inst in instances {
-                                let inst_str = match inst {
-                                    Value::String(s) => s.clone(),
-                                    Value::Number(n) => n.to_string(),
-                                    _ => continue,
-                                };
-                                items.push(inst_str);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        items.sort();
-        items.dedup();
-
-        if !items.is_empty() {
+        if items.is_empty() {
+            println!("(none)");
+        } else {
             let max_width = items.iter().map(|i| i.len()).max().unwrap_or(0) + 2;
             let terminal_width = 80;
             let cols = (terminal_width / max_width).max(1);
@@ -437,7 +443,7 @@ impl Repl {
                     println!();
                 }
             }
-            if items.len() % cols != 0 {
+            if !items.len().is_multiple_of(cols) {
                 println!();
             }
         }
@@ -525,17 +531,203 @@ mod tests {
         assert_eq!(pos, 0);
         // Fallback if qtile is not running, but in coverage env it is
         if !candidates.is_empty() {
-            assert!(candidates.iter().any(|c| c.display == "status"));
+            assert!(candidates.iter().any(|c| c.replacement == "status"));
         }
 
         // cd completion
         let (pos, candidates) = helper.complete("cd gro", 6, &context).unwrap();
         assert_eq!(pos, 3);
-        assert!(candidates.iter().any(|c| c.display == "group"));
+        assert!(candidates.iter().any(|c| c.replacement == "group"));
 
         // Completion inside a class
         let (pos, _candidates) = helper.complete("cd group ", 9, &context).unwrap();
         assert_eq!(pos, 9);
+    }
+
+    #[test]
+    fn test_ls_items_at_root_returns_all_classes() {
+        let repl = Repl::new();
+        let items = repl.ls_items(&["root".to_string()]);
+        let expected = {
+            let mut v = vec!["bar", "group", "layout", "screen", "widget", "window"];
+            v.sort();
+            v
+        };
+        assert_eq!(items, expected);
+    }
+
+    #[test]
+    fn test_ls_items_at_instance_returns_classes() {
+        // Path ending with a specific instance (not an item_class) → same as root
+        let repl = Repl::new();
+        let path: Vec<String> = ["root", "group", "www"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let items = repl.ls_items(&path);
+        assert!(items.contains(&"bar".to_string()));
+        assert!(items.contains(&"group".to_string()));
+        assert!(!items.is_empty());
+    }
+
+    #[test]
+    fn test_ls_items_sorted_and_deduped() {
+        let repl = Repl::new();
+        let items = repl.ls_items(&["root".to_string()]);
+        let mut sorted = items.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(items, sorted);
+    }
+
+    #[test]
+    #[ignore = "requires live Qtile socket"]
+    fn test_ls_items_item_class_returns_instances() {
+        let repl = Repl::new();
+        // screen must have at least one instance (screen 0) in any running qtile
+        let items = repl.ls_items(&["root".to_string(), "screen".to_string()]);
+        assert!(
+            !items.is_empty(),
+            "screen should have at least one instance"
+        );
+        // All returned items should be valid screen indices (numbers) or names
+        for item in &items {
+            assert!(!item.is_empty());
+        }
+    }
+
+    #[test]
+    #[ignore = "requires live Qtile socket"]
+    fn test_ls_items_group_returns_group_names() {
+        let repl = Repl::new();
+        let items = repl.ls_items(&["root".to_string(), "group".to_string()]);
+        assert!(!items.is_empty(), "should have at least one group");
+    }
+
+    #[test]
+    fn test_complete_cd_at_root_shows_classes_not_commands() {
+        use rustyline::history::DefaultHistory;
+        use rustyline::Context;
+        let helper = QtileHelper {
+            client: QtileClient::new(),
+            current_object: vec!["root".to_string()],
+        };
+        let history = DefaultHistory::new();
+        let ctx = Context::new(&history);
+
+        // `cd ` → only item_classes offered (no commands like "status", "eval", etc.)
+        let (_, candidates) = helper.complete("cd ", 3, &ctx).unwrap();
+        let names: Vec<&str> = candidates.iter().map(|c| c.replacement.as_str()).collect();
+        for class in &["bar", "group", "layout", "screen", "window", "widget"] {
+            assert!(names.contains(class), "expected {class} in cd candidates");
+        }
+        // Commands should NOT appear in cd completion
+        assert!(
+            !names.contains(&"status"),
+            "commands must not appear in cd completion"
+        );
+        assert!(
+            !names.contains(&"eval"),
+            "commands must not appear in cd completion"
+        );
+    }
+
+    #[test]
+    fn test_complete_no_cd_shows_commands() {
+        use rustyline::history::DefaultHistory;
+        use rustyline::Context;
+        let helper = QtileHelper {
+            client: QtileClient::new(),
+            current_object: vec!["root".to_string()],
+        };
+        let history = DefaultHistory::new();
+        let ctx = Context::new(&history);
+
+        // Plain `sta` → commands like "status" (if qtile running) plus item_classes
+        let (_, candidates) = helper.complete("sta", 3, &ctx).unwrap();
+        // item_classes starting with "sta" — none, so if qtile is up "status" must be there
+        if !candidates.is_empty() {
+            assert!(
+                candidates.iter().any(|c| c.replacement == "status"),
+                "expected 'status' in plain command completion"
+            );
+        }
+    }
+
+    #[test]
+    fn test_complete_prefix_filtering() {
+        use rustyline::history::DefaultHistory;
+        use rustyline::Context;
+        let helper = QtileHelper {
+            client: QtileClient::new(),
+            current_object: vec!["root".to_string()],
+        };
+        let history = DefaultHistory::new();
+        let ctx = Context::new(&history);
+
+        // `cd gr` → only "group" from item_classes matches
+        let (_, candidates) = helper.complete("cd gr", 5, &ctx).unwrap();
+        let names: Vec<&str> = candidates.iter().map(|c| c.replacement.as_str()).collect();
+        assert!(names.contains(&"group"));
+        assert!(!names.contains(&"screen"));
+        assert!(!names.contains(&"layout"));
+    }
+
+    #[test]
+    fn test_complete_dedup() {
+        use rustyline::history::DefaultHistory;
+        use rustyline::Context;
+        let helper = QtileHelper {
+            client: QtileClient::new(),
+            current_object: vec!["root".to_string()],
+        };
+        let history = DefaultHistory::new();
+        let ctx = Context::new(&history);
+
+        // No duplicate candidates
+        let (_, candidates) = helper.complete("cd ", 3, &ctx).unwrap();
+        let names: Vec<&str> = candidates.iter().map(|c| c.replacement.as_str()).collect();
+        let mut sorted = names.clone();
+        sorted.dedup();
+        assert_eq!(names, sorted, "candidates must not contain duplicates");
+    }
+
+    #[test]
+    fn test_complete_sorted() {
+        use rustyline::history::DefaultHistory;
+        use rustyline::Context;
+        let helper = QtileHelper {
+            client: QtileClient::new(),
+            current_object: vec!["root".to_string()],
+        };
+        let history = DefaultHistory::new();
+        let ctx = Context::new(&history);
+
+        let (_, candidates) = helper.complete("cd ", 3, &ctx).unwrap();
+        let names: Vec<&str> = candidates.iter().map(|c| c.replacement.as_str()).collect();
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted, "candidates must be sorted");
+    }
+
+    #[test]
+    fn test_handle_cd_empty_args() {
+        // cd with no args should not panic and path should stay the same
+        let mut repl = Repl::new();
+        repl.handle_cd(&[]);
+        // path unchanged (handle_cd calls handle_ls which prints but doesn't change path)
+        assert_eq!(repl.current_object, vec!["root"]);
+    }
+
+    #[test]
+    fn test_handle_line_dotdot() {
+        let mut repl = Repl::new();
+        repl.current_object = vec!["root".into(), "group".into()];
+        assert!(!repl.handle_line(".."));
+        assert_eq!(repl.current_object, vec!["root"]);
+        // .. at root stays at root
+        assert!(!repl.handle_line(".."));
+        assert_eq!(repl.current_object, vec!["root"]);
     }
 
     #[test]
