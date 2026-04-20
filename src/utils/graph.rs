@@ -104,6 +104,22 @@ impl ObjectType {
             _ => Err(Error::msg(format!("Failed to parse {string}"))),
         }
     }
+    /// Returns the node type names that are valid children of this node in the command graph.
+    pub fn children(&self) -> &'static [&'static str] {
+        match self {
+            Self::Screen(_) => &["bar", "group", "layout", "widget", "window"],
+            Self::Group(_) => &["layout", "screen", "window"],
+            Self::Layout(_) => &["group", "screen", "window"],
+            Self::Window(_) => &["group", "layout", "screen"],
+            Self::Bar(_) => &["screen", "widget"],
+            Self::Widget(_) => &["bar", "screen"],
+            Self::Core => &[],
+            Self::Root => &[
+                "bar", "core", "group", "layout", "screen", "widget", "window",
+            ],
+        }
+    }
+
     /// For:
     /// - [`Core`](ObjectType::Core)
     /// - [`Root`](ObjectType::Root)
