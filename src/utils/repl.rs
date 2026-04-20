@@ -1,4 +1,5 @@
 use crate::utils::client::{CallResult, CommandQuery, QtileClient};
+use crate::utils::graph::ObjectType;
 use rustyline::completion::{Completer, Pair};
 use rustyline::config::BellStyle;
 use rustyline::error::ReadlineError;
@@ -229,6 +230,41 @@ struct QtileHelper {
     hints: bool,
 }
 
+/// Apply a sequence of path segments onto a base path.
+fn apply_segments(base: &mut Vec<String>, segments: &[&str]) {
+    for &seg in segments {
+        match seg {
+            ".." => {
+                if base.len() > 1 {
+                    base.pop();
+                }
+            }
+            "/" | "root" => *base = vec!["root".to_string()],
+            _ => base.push(seg.to_string()),
+        }
+    }
+}
+
+/// Expand whitespace-split tokens on `/`, treating a leading `/` as an absolute-path
+/// marker (resets to root). `screen/0` and `/screen/0` both work.
+fn expand_path_args<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    let mut out: Vec<&'a str> = Vec::new();
+    for &arg in args {
+        if arg.starts_with('/') {
+            out.push("/");
+            out.extend(
+                arg.strip_prefix('/')
+                    .unwrap_or("")
+                    .split('/')
+                    .filter(|s| !s.is_empty()),
+            );
+        } else {
+            out.extend(arg.split('/').filter(|s| !s.is_empty()));
+        }
+    }
+    out
+}
+
 impl QtileHelper {
     /// Attempts to find the "active" object path based on the current line's input.
     fn get_active_path(&self, parts: &[&str]) -> Vec<String> {
@@ -241,17 +277,8 @@ impl QtileHelper {
             0
         };
 
-        for &part in &parts[start_idx..] {
-            if part == ".." {
-                if active_path.len() > 1 {
-                    active_path.pop();
-                }
-            } else if part == "/" || part == "root" {
-                active_path = vec!["root".to_string()];
-            } else {
-                active_path.push(part.to_string());
-            }
-        }
+        let expanded = expand_path_args(&parts[start_idx..]);
+        apply_segments(&mut active_path, &expanded);
         active_path
     }
 }
@@ -283,7 +310,8 @@ impl Completer for QtileHelper {
         let item_class_names: Vec<&str> = ITEM_CLASSES.iter().map(|(n, _)| *n).collect();
 
         let all_parts: Vec<&str> = line[..pos].split_whitespace().collect();
-        let is_cd = !all_parts.is_empty() && all_parts[0] == "cd";
+        let first = all_parts.first().copied().unwrap_or("");
+        let is_nav_only = first == "cd" || first == "ls";
 
         let navigation_parts = if line.ends_with(' ') {
             &all_parts[..]
@@ -297,7 +325,7 @@ impl Completer for QtileHelper {
         let mode = self.completion_mode;
 
         // 1. Commands — name only in display so multi-column layout fits without paging
-        if !is_cd {
+        if !is_nav_only {
             let query = CommandQuery::new()
                 .object(active_path.clone())
                 .function("commands".to_string());
@@ -318,7 +346,7 @@ impl Completer for QtileHelper {
 
         // 2. Navigation candidates — same logic as handle_ls:
         //    active_path ends with an item_class → offer instances (no description)
-        //    otherwise → offer item_classes with static descriptions
+        //    otherwise → offer valid child node types for the current node
         let active_last = active_path.last().map(|s| s.as_str()).unwrap_or("root");
         if item_class_names.contains(&active_last) {
             let mut parent_path = active_path.clone();
@@ -348,8 +376,17 @@ impl Completer for QtileHelper {
                 }
             }
         } else {
+            // Path ends on a selector — find the enclosing node type and offer its children.
+            let node_type = active_path
+                .iter()
+                .rev()
+                .find(|t| item_class_names.contains(&t.as_str()))
+                .map(|s| s.as_str())
+                .unwrap_or("root");
+            let obj = ObjectType::with_none(node_type).unwrap_or(ObjectType::Root);
+            let valid_children = obj.children();
             for (name, doc) in ITEM_CLASSES {
-                if mode.matches(name, word) {
+                if valid_children.contains(name) && mode.matches(name, word) {
                     candidates.push(Pair {
                         display: format!("{name:<20} {doc}"),
                         replacement: name.to_string(),
@@ -372,13 +409,29 @@ impl Hinter for QtileHelper {
         if !self.hints || pos < line.len() {
             return None;
         }
-        let word = line.split_whitespace().last()?;
+
+        let all_parts: Vec<&str> = line.split_whitespace().collect();
+        // Don't hint in navigation-only contexts.
+        let first = all_parts.first().copied().unwrap_or("");
+        if first == "cd" || first == "ls" {
+            return None;
+        }
+
+        let word = all_parts.last()?;
         if word.is_empty() {
             return None;
         }
 
+        // Derive the object path from everything typed before the current word.
+        let nav_parts = if all_parts.len() > 1 {
+            &all_parts[..all_parts.len() - 1]
+        } else {
+            &[]
+        };
+        let object_path = self.get_active_path(nav_parts);
+
         let query = CommandQuery::new()
-            .object(self.current_object.clone())
+            .object(object_path.clone())
             .function("commands".to_string());
         let cmds = match self.client.call(query) {
             Ok(CallResult::Value(Value::Array(a))) => a,
@@ -399,7 +452,7 @@ impl Hinter for QtileHelper {
         let suffix = &cmd[word.len()..];
 
         let doc_query = CommandQuery::new()
-            .object(self.current_object.clone())
+            .object(object_path)
             .function("doc".to_string())
             .args(vec![cmd.to_string()]);
 
@@ -530,7 +583,12 @@ impl Repl {
             };
             rl.set_helper(Some(helper));
 
-            let prompt = format!("({}) > ", self.current_object.join("."));
+            let path_display = if self.current_object == ["root"] {
+                "/".to_string()
+            } else {
+                format!("/{}", self.current_object[1..].join("/"))
+            };
+            let prompt = format!("{path_display} > ");
             let readline = rl.readline(&prompt);
             match readline {
                 Ok(line) => {
@@ -595,42 +653,27 @@ impl Repl {
 
     pub(crate) fn handle_cd(&mut self, args: &[&str]) {
         if args.is_empty() {
-            // Like real cd, no-op or go to root? Let's stay here but print info?
-            // Actually, showing classes here is useful.
             let _ = self.handle_ls(&[]);
             return;
         }
 
-        let target = args.join(" ");
-        if target == ".." {
-            if self.current_object.len() > 1 {
-                self.current_object.pop();
-            }
-        } else if target == "/" || target == "root" {
-            self.current_object = vec!["root".to_string()];
+        let expanded = expand_path_args(args);
+        let mut next_obj = self.current_object.clone();
+        apply_segments(&mut next_obj, &expanded);
+
+        if next_obj == self.current_object {
+            return;
+        }
+
+        // Verify the target exists before committing the navigation.
+        let query = CommandQuery::new()
+            .object(next_obj.clone())
+            .function("commands".to_string());
+
+        if self.client.call(query).is_ok() {
+            self.current_object = next_obj;
         } else {
-            let mut next_obj = self.current_object.clone();
-            for part in args {
-                if *part == ".." {
-                    if next_obj.len() > 1 {
-                        next_obj.pop();
-                    }
-                } else {
-                    next_obj.push(part.to_string());
-                }
-            }
-
-            let query = CommandQuery::new()
-                .object(next_obj.clone())
-                .function("commands".to_string());
-
-            let res = self.client.call(query);
-
-            if res.is_ok() {
-                self.current_object = next_obj;
-            } else {
-                println!("Error: Object '{target}' not found or has no commands.");
-            }
+            println!("Error: Object '{}' not found.", expanded.join("/"));
         }
     }
 
@@ -650,12 +693,13 @@ impl Repl {
 
     /// Returns the items to display for a given target path.
     /// - Path ends with an item_class → instances of that class (from Qtile IPC)
-    /// - Otherwise → the fixed set of navigable node types
+    /// - Otherwise → child node types valid for the current node type
     pub(crate) fn ls_items(&self, target_path: &[String]) -> Vec<String> {
         const ITEM_CLASSES: &[&str] = &["layout", "group", "screen", "window", "bar", "widget"];
 
         let last = target_path.last().map(|s| s.as_str()).unwrap_or("root");
         let mut items = if ITEM_CLASSES.contains(&last) {
+            // Path ends on a class name — list instances of that class.
             let mut parent = target_path.to_vec();
             parent.pop();
             let query = CommandQuery::new()
@@ -680,7 +724,16 @@ impl Repl {
             }
             instances
         } else {
-            ITEM_CLASSES.iter().map(|s| s.to_string()).collect()
+            // Path ends on a selector (e.g. "0", "bottom") — find the enclosing node type
+            // by scanning backward for the last item-class token, then use its known children.
+            let node_type = target_path
+                .iter()
+                .rev()
+                .find(|t| ITEM_CLASSES.contains(&t.as_str()))
+                .map(|s| s.as_str())
+                .unwrap_or("root");
+            let obj = ObjectType::with_none(node_type).unwrap_or(ObjectType::Root);
+            obj.children().iter().map(|s| s.to_string()).collect()
         };
 
         items.sort();
@@ -690,17 +743,8 @@ impl Repl {
 
     pub(crate) fn handle_ls(&self, args: &[&str]) -> anyhow::Result<()> {
         let mut target_path = self.current_object.clone();
-        for &arg in args {
-            if arg == ".." {
-                if target_path.len() > 1 {
-                    target_path.pop();
-                }
-            } else if arg == "/" || arg == "root" {
-                target_path = vec!["root".to_string()];
-            } else {
-                target_path.push(arg.to_string());
-            }
-        }
+        let expanded = expand_path_args(args);
+        apply_segments(&mut target_path, &expanded);
 
         let items = self.ls_items(&target_path);
 
@@ -815,12 +859,11 @@ mod tests {
     fn test_ls_items_at_root_returns_all_classes() {
         let repl = Repl::new();
         let items = repl.ls_items(&["root".to_string()]);
-        let expected = {
-            let mut v = vec!["bar", "group", "layout", "screen", "widget", "window"];
-            v.sort();
-            v
-        };
-        assert_eq!(items, expected);
+        // Root can access all node types including core.
+        assert!(items.contains(&"bar".to_string()));
+        assert!(items.contains(&"group".to_string()));
+        assert!(items.contains(&"screen".to_string()));
+        assert!(items.contains(&"window".to_string()));
     }
 
     #[test]
@@ -831,8 +874,11 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         let items = repl.ls_items(&path);
-        assert!(items.contains(&"bar".to_string()));
-        assert!(items.contains(&"group".to_string()));
+        // group children: layout, screen, window
+        assert!(items.contains(&"layout".to_string()));
+        assert!(items.contains(&"screen".to_string()));
+        assert!(items.contains(&"window".to_string()));
+        assert!(!items.contains(&"bar".to_string()));
         assert!(!items.is_empty());
     }
 
