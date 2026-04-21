@@ -73,6 +73,11 @@ pub struct Client {
 }
 
 impl Client {
+    #[cfg(feature = "framing")]
+    pub fn new_from_stream(stream: UnixStream, _framed: bool) -> Self {
+        Self { stream }
+    }
+
     pub fn connect() -> anyhow::Result<Self> {
         Self::connect_with_path(None)
     }
@@ -93,8 +98,41 @@ impl Client {
     }
 
     /// Send a message and get a response using a one-off connection.
-    pub fn send_request(data: String) -> anyhow::Result<String> {
+    /// When `framed` is true, uses the JSON IPC length-prefixed framing protocol.
+    /// Falls back to legacy unframed mode otherwise, with auto-retry on empty response.
+    pub fn send_request(data: String, framed: bool) -> anyhow::Result<String> {
+        let res = Self::try_send_request(data.clone(), framed);
+        // If unframed returned empty, retry with framing (server may have dropped legacy support).
+        if !framed {
+            if let Ok(ref s) = res {
+                if s.is_empty() {
+                    return Self::try_send_request(data, true);
+                }
+            }
+        }
+        res
+    }
+
+    fn try_send_request(data: String, framed: bool) -> anyhow::Result<String> {
         let mut client = Self::connect()?;
+        if framed {
+            #[cfg(feature = "framing")]
+            {
+                let payload = serde_json::json!({
+                    "message_type": "command",
+                    "content": serde_json::from_str::<serde_json::Value>(&data)
+                        .unwrap_or(serde_json::Value::String(data.clone()))
+                });
+                let framed_data = serde_json::to_string(&payload)?;
+                client.write_frame(framed_data.as_bytes())?;
+                let bytes = client.read_frame()?;
+                return String::from_utf8(bytes).context("frame payload is not valid UTF-8");
+            }
+            #[cfg(not(feature = "framing"))]
+            {
+                let _ = framed; // suppress unused warning
+            }
+        }
         client.stream.write_all(data.as_bytes())?;
 
         // Issue 2: ENOTCONN / BrokenPipe from shutdown means the server already closed
@@ -142,14 +180,45 @@ impl Client {
         String::from_utf8(raw).context("ipc: response is not valid UTF-8")
     }
 
+    /// Write a length-prefixed frame (4-byte big-endian length + payload).
+    #[cfg(feature = "framing")]
+    pub fn write_frame(&mut self, data: &[u8]) -> anyhow::Result<()> {
+        let len = data.len() as u32;
+        self.stream
+            .write_all(&len.to_be_bytes())
+            .context("Failed to write frame header")?;
+        self.stream
+            .write_all(data)
+            .context("Failed to write frame body")?;
+        Ok(())
+    }
+
+    /// Read a length-prefixed frame (4-byte big-endian length + payload).
+    #[cfg(feature = "framing")]
+    pub fn read_frame(&mut self) -> anyhow::Result<Vec<u8>> {
+        let mut len_buf = [0u8; 4];
+        self.stream
+            .read_exact(&mut len_buf)
+            .context("Failed to read frame header")?;
+        let len = u32::from_be_bytes(len_buf) as usize;
+        let mut buf = vec![0u8; len];
+        self.stream
+            .read_exact(&mut buf)
+            .context("Failed to read frame body")?;
+        Ok(buf)
+    }
+
     /// Legacy wrapper for backward compatibility.
     #[allow(dead_code)]
     pub fn send(data: String) -> anyhow::Result<String> {
-        Self::send_request(data)
+        Self::send_request(data, false)
     }
 
     /// Validates and parses the Qtile IPC response.
-    pub fn match_response(response: anyhow::Result<String>) -> anyhow::Result<Value> {
+    pub fn match_response(
+        response: anyhow::Result<String>,
+        _framed: bool,
+    ) -> anyhow::Result<Value> {
         let response = response?;
         let mut s: Value = serde_json::from_str(&response).context("ipc.Client: invalid JSON")?;
 
@@ -320,7 +389,7 @@ mod tests {
             }
         });
         let response = serde_json::to_string(&payload).unwrap();
-        let result = Client::match_response(Ok(response))
+        let result = Client::match_response(Ok(response), false)
             .expect("Should parse new JSON IPC reply with 'result'");
         assert_eq!(result, json!({"version": "0.1.dev"}));
     }
@@ -335,7 +404,7 @@ mod tests {
             }
         });
         let response = serde_json::to_string(&payload).unwrap();
-        let result = Client::match_response(Ok(response))
+        let result = Client::match_response(Ok(response), false)
             .expect("Should parse new JSON IPC reply with 'data'");
         assert_eq!(result, json!({"version": "0.1.dev"}));
     }
@@ -343,7 +412,8 @@ mod tests {
     #[test]
     fn test_match_response_legacy() {
         let response = "[0, {\"version\": \"0.1.dev\"}]".to_string();
-        let result = Client::match_response(Ok(response)).expect("Should parse legacy IPC reply");
+        let result =
+            Client::match_response(Ok(response), false).expect("Should parse legacy IPC reply");
         assert_eq!(result, json!({"version": "0.1.dev"}));
     }
 
@@ -351,38 +421,44 @@ mod tests {
     fn test_match_response_flexible() {
         let legacy_response = "[0, \"ok\"]".to_string();
         let modern_response = json!({"status": 0, "result": "ok"}).to_string();
-        assert_eq!(Client::match_response(Ok(legacy_response)).unwrap(), "ok");
-        assert_eq!(Client::match_response(Ok(modern_response)).unwrap(), "ok");
+        assert_eq!(
+            Client::match_response(Ok(legacy_response), false).unwrap(),
+            "ok"
+        );
+        assert_eq!(
+            Client::match_response(Ok(modern_response), false).unwrap(),
+            "ok"
+        );
     }
 
     #[test]
     fn test_match_response_errors() {
-        assert!(Client::match_response(Ok("{invalid".into())).is_err());
-        assert!(Client::match_response(Ok("[]".into())).is_err());
+        assert!(Client::match_response(Ok("{invalid".into()), false).is_err());
+        assert!(Client::match_response(Ok("[]".into()), false).is_err());
 
         let missing_status = json!({"result": "ok"}).to_string();
-        assert!(Client::match_response(Ok(missing_status)).is_err());
+        assert!(Client::match_response(Ok(missing_status), false).is_err());
 
         let bad_status = json!({"status": "error", "result": "ok"}).to_string();
-        assert!(Client::match_response(Ok(bad_status)).is_err());
+        assert!(Client::match_response(Ok(bad_status), false).is_err());
 
         let err_resp = json!({"status": 1, "result": "some error"}).to_string();
-        let res = Client::match_response(Ok(err_resp));
+        let res = Client::match_response(Ok(err_resp), false);
         assert!(res.is_err());
         assert!(res.unwrap_err().to_string().contains("some error"));
 
         let weird_err = json!({"status": 1, "result": 123}).to_string();
-        assert!(Client::match_response(Ok(weird_err)).is_err());
+        assert!(Client::match_response(Ok(weird_err), false).is_err());
 
         // Qtile "Session locked." style: plain {"error": "..."} object
         let locked = json!({"error": "Session locked."}).to_string();
-        let res = Client::match_response(Ok(locked));
+        let res = Client::match_response(Ok(locked), false);
         assert!(res.is_err());
         assert!(res.unwrap_err().to_string().contains("Session locked."));
 
         // Legacy array where result is {"error": "..."}
         let locked_legacy = json!([1, {"error": "Session locked."}]).to_string();
-        let res = Client::match_response(Ok(locked_legacy));
+        let res = Client::match_response(Ok(locked_legacy), false);
         assert!(res.is_err());
         assert!(res.unwrap_err().to_string().contains("Session locked."));
     }
