@@ -7,22 +7,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 # Build
 cargo build --release      # release binary (qticc)
-make build                 # alias
+just build                 # alias
 
 # Test (unit tests only, no running Qtile required)
-cargo test --lib -- --nocapture
-make test
+cargo test --lib --all-features -- --nocapture
+just test
 
 # Lint / format
-cargo clippy -- -D warnings
+cargo clippy --all-features -- -D warnings
 cargo fmt -- --check
-make clippy
-make fmt
+just clippy
 
 # Integration tests (require a running Qtile instance)
-make docker-test-x11                         # X11 tests in Docker (Python 3.12 default)
-make docker-test-wl PYTHON_VERSION=3.13      # Wayland tests
-make docker-shell                            # drop into test container
+just docker-test-x11                              # X11 tests in Docker (Python 3.12 default)
+PYTHON_VERSION=3.13 just docker-test-wl           # Wayland tests
+just docker-shell                                 # drop into test container
 
 # Run a single test by name
 cargo test --lib test_find_sockfile -- --nocapture
@@ -34,21 +33,16 @@ The project is a single Rust binary (`qticc`) with a companion library crate (`q
 
 | File | Role |
 |------|------|
-| `args.rs` | CLI parsing via clap: `cmd-obj` subcommand + `--framed` global flag |
+| `args.rs` | CLI parsing via clap: `cmd-obj` subcommand |
 | `graph.rs` | Static `OBJECTS` list and `ObjectType` enum mapping Qtile's command graph nodes |
 | `parser.rs` | `CommandParser` — translates CLI object/function/args into the `selectors`-based JSON payload Qtile expects; also fetches help via `commands`/`eval`/`doc` IPC calls |
-| `ipc.rs` | `Client` — raw Unix socket I/O; implements both **framed** (4-byte BE length prefix) and **unframed** (EOF-terminated) protocols; auto-retries with framing on empty response |
+| `ipc.rs` | `Client` — raw Unix socket I/O; sends unframed JSON payload, reads response until EOF; handles both legacy array and modern `{"message_type": "reply"}` envelope responses |
 | `client.rs` | `QtileClient` + `CommandQuery` builder — the public API layer between the CLI/REPL and the IPC client |
 | `repl.rs` | Interactive REPL using `rustyline`; supports `cd`/`ls`/`..` navigation of the command graph and tab-completion backed by live Qtile queries |
 
-### IPC Protocols
+### IPC Protocol
 
-Two protocols exist, selected by `--framed`:
-
-- **Framed** (new, recommended): JSON message wrapped as `{"message_type": "command", "content": <payload>}`, length-prefixed with 4-byte big-endian header. Response unwrapped from `{"message_type": "reply", "content": ...}`. Corresponds to Qtile's `json_ipc` branch (PR #5835).
-- **Unframed** (legacy): raw JSON payload sent over socket, connection closed after write, response read until EOF.
-
-The client automatically retries with framing when an unframed request returns an empty response.
+Unframed: raw JSON payload `[selectors, name, args, kwargs, lifted]` sent over Unix socket, connection closed after write, response read until EOF. The response may be a legacy `[status, result]` array or a modern `{"message_type": "reply", "content": {"status": N, "result": ...}}` envelope — both are handled transparently.
 
 ### Socket Discovery
 
@@ -69,7 +63,7 @@ Self-hosted GitHub Actions runner (`qtile`) on Debian Trixie/Sid. Matrix: Python
 - **Locking**: `.github/scripts/install-deps` uses a global lock with exponential backoff and stale-lock detection (30 min threshold) to prevent parallel jobs from corrupting shared PVC state.
 - **Dynamic patching**: `.github/scripts/patch_wayland_setup.py` wraps build blocks in the upstream Qtile setup script and uses `pkg-config` to skip rebuilding Wayland dependencies (wlroots, etc.) already present in the PVC.
 - **UV**: Python and Qtile are managed via `uv`; GitHub remote caching is disabled (`enable-cache: false`) to avoid `tar` conflicts on the shared volume.
-- Qtile is installed from the `json_ipc` branch for framing tests.
+- Qtile is installed from mainline `master` (`qtile/qtile`).
 
 ## Development Conventions
 

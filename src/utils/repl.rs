@@ -299,6 +299,7 @@ impl Completer for QtileHelper {
 
         const ITEM_CLASSES: &[(&str, &str)] = &[
             ("bar", "widget bar on a screen"),
+            ("core", "backend core interface"),
             ("group", "workspace group"),
             ("layout", "window layout"),
             ("screen", "monitor screen"),
@@ -313,7 +314,7 @@ impl Completer for QtileHelper {
         let first = all_parts.first().copied().unwrap_or("");
         let is_nav_only = first == "cd" || first == "ls";
 
-        let navigation_parts = if line.ends_with(' ') {
+        let navigation_parts = if line[..pos].ends_with(' ') {
             &all_parts[..]
         } else if all_parts.is_empty() {
             &[]
@@ -459,7 +460,8 @@ impl Hinter for QtileHelper {
         if let Ok(CallResult::Value(Value::String(doc))) = self.client.call(doc_query) {
             let first_line = doc.lines().next().unwrap_or("").trim();
             let sig_start = first_line.find('(')?;
-            let sig = &first_line[sig_start..];
+            let sig_end = first_line.find(')')?;
+            let sig = &first_line[sig_start..=sig_end];
             let desc = doc.lines().nth(1).unwrap_or("").trim();
             let doc_part = if desc.is_empty() {
                 format!("  {sig}")
@@ -695,7 +697,9 @@ impl Repl {
     /// - Path ends with an item_class → instances of that class (from Qtile IPC)
     /// - Otherwise → child node types valid for the current node type
     pub(crate) fn ls_items(&self, target_path: &[String]) -> Vec<String> {
-        const ITEM_CLASSES: &[&str] = &["layout", "group", "screen", "window", "bar", "widget"];
+        const ITEM_CLASSES: &[&str] = &[
+            "bar", "core", "group", "layout", "screen", "widget", "window",
+        ];
 
         let last = target_path.last().map(|s| s.as_str()).unwrap_or("root");
         let mut items = if ITEM_CLASSES.contains(&last) {

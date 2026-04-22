@@ -188,7 +188,7 @@ impl Client {
     fn decode_qtile_tuples(val: Value) -> Value {
         match val {
             Value::Object(mut map) => {
-                if map.len() == 1 {
+                if map.len() == 1 && matches!(map.get("$tuple"), Some(Value::Array(_))) {
                     if let Some(Value::Array(arr)) = map.remove("$tuple") {
                         return Value::Array(
                             arr.into_iter().map(Self::decode_qtile_tuples).collect(),
