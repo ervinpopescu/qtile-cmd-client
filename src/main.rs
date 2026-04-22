@@ -62,10 +62,6 @@ mod tests {
 
     #[test]
     fn test_run_cmd_obj_status() {
-        // Ensure we respect current display
-        let _display = std::env::var("DISPLAY").unwrap_or_else(|_| ":99".to_string());
-        std::env::set_var("DISPLAY", &_display);
-
         let args = Args {
             command: Commands::CmdObj {
                 object: None,

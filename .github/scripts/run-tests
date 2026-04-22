@@ -26,7 +26,7 @@ timeout 10 bash -c "while ! [ -S \"$XDG_X11/qtile/qtilesocket.$DISPLAY\" ]; do s
   exit 1
 }
 
-XDG_CACHE_HOME="$XDG_X11" cargo test --lib -q --all-features -- --nocapture --show-output --include-ignored --test-threads "$(nproc)" || {
+XDG_CACHE_HOME="$XDG_X11" cargo test --lib -q --all-features -- --nocapture --show-output --include-ignored --test-threads 1 || {
   echo "--- X11 QTILE LOG ---"
   cat "qtile-x11-$PYTHON_VERSION.log"
   cat qtile_x11.log
@@ -62,7 +62,7 @@ timeout 10 bash -c "while ! [ -S \"$XDG_WL/qtile/qtilesocket.$WAYLAND_DISPLAY\" 
   exit 1
 }
 
-XDG_CACHE_HOME="$XDG_WL" cargo test --lib -q --all-features -- --nocapture --show-output --include-ignored --test-threads "$(nproc)" || {
+XDG_CACHE_HOME="$XDG_WL" cargo test --lib -q --all-features -- --nocapture --show-output --include-ignored --test-threads 1 || {
   echo "--- WAYLAND QTILE LOG ---"
   cat "qtile-wl-$PYTHON_VERSION.log"
   cat qtile_wl.log

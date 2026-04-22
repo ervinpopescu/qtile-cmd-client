@@ -7,7 +7,6 @@ edition = "2021"
 anyhow = { version = "*" }
 clap = { version = "4.6.0", features = ["derive"] }
 serde = { version = "*", features = ["derive"] }
-serde_tuple = { version = "*" }
 serde_json = { version = "*" }
 log = { version = "0.4.29" }
 strum = { version = "0.28.0", features = ["derive"] }
