@@ -239,6 +239,7 @@ fn apply_segments(base: &mut Vec<String>, segments: &[&str]) {
                     base.pop();
                 }
             }
+            "." => {}
             "/" | "root" => *base = vec!["root".to_string()],
             _ => base.push(seg.to_string()),
         }
@@ -292,10 +293,22 @@ impl Completer for QtileHelper {
         pos: usize,
         _ctx: &Context<'_>,
     ) -> rustyline::Result<(usize, Vec<Pair>)> {
-        let (start, word) = line[..pos]
+        let (base_start, full_word) = line[..pos]
             .rsplit_once(char::is_whitespace)
             .map(|(pre, word)| (pre.len() + 1, word))
             .unwrap_or((0, &line[..pos]));
+
+        // If the word contains '/', treat everything before the last '/' as additional
+        // path context and complete only the final component.
+        let (start, word, path_in_word) = if let Some(slash_pos) = full_word.rfind('/') {
+            (
+                base_start + slash_pos + 1,
+                &full_word[slash_pos + 1..],
+                Some(&full_word[..slash_pos]),
+            )
+        } else {
+            (base_start, full_word, None)
+        };
 
         const ITEM_CLASSES: &[(&str, &str)] = &[
             ("bar", "widget bar on a screen"),
@@ -322,7 +335,11 @@ impl Completer for QtileHelper {
             &all_parts[..all_parts.len() - 1]
         };
 
-        let active_path = self.get_active_path(navigation_parts);
+        let mut active_path = self.get_active_path(navigation_parts);
+        if let Some(extra) = path_in_word {
+            let extra_expanded = expand_path_args(&[extra]);
+            apply_segments(&mut active_path, &extra_expanded);
+        }
         let mode = self.completion_mode;
 
         // 1. Commands — name only in display so multi-column layout fits without paging
@@ -959,6 +976,30 @@ mod tests {
     }
 
     #[test]
+    fn test_complete_slash_in_word_adjusts_start() {
+        use rustyline::history::DefaultHistory;
+        use rustyline::Context;
+        let h = helper();
+        let history = DefaultHistory::new();
+        let ctx = Context::new(&history);
+
+        // "cd screen/" — start should point past the slash; completions are screen instances.
+        let line = "cd screen/";
+        let (start, _candidates) = h.complete(line, line.len(), &ctx).unwrap();
+        // start must be at the position right after the '/', not the beginning of "screen/".
+        assert_eq!(start, line.len(), "start should be at end of slash");
+
+        // "cd screen/0" — same test with a partial instance name.
+        let line2 = "cd screen/0";
+        let (start2, _) = h.complete(line2, line2.len(), &ctx).unwrap();
+        assert_eq!(
+            start2,
+            "cd screen/".len(),
+            "start should be at '0' position"
+        );
+    }
+
+    #[test]
     fn test_complete_prefix_filtering() {
         use rustyline::history::DefaultHistory;
         use rustyline::Context;
@@ -1001,6 +1042,28 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted, "candidates must be sorted");
+    }
+
+    #[test]
+    fn test_apply_segments_dot_noop() {
+        let mut base = vec!["root".to_string(), "screen".to_string()];
+        apply_segments(&mut base, &["."]);
+        assert_eq!(base, vec!["root", "screen"]);
+
+        let mut base2 = vec!["root".to_string()];
+        apply_segments(&mut base2, &[".", ".", "group"]);
+        assert_eq!(base2, vec!["root", "group"]);
+    }
+
+    #[test]
+    fn test_handle_cd_dot_noop() {
+        let mut repl = Repl::new();
+        repl.current_object = vec!["root".into(), "group".into()];
+        repl.handle_cd(&["."]);
+        // Should stay at ["root", "group"] — cd . is a no-op regardless of IPC result.
+        // (IPC verify for ["root", "group"] may fail without live Qtile, but path is unchanged
+        // because apply_segments(".", ..) leaves the path equal to current_object.)
+        assert_eq!(repl.current_object, vec!["root", "group"]);
     }
 
     #[test]
