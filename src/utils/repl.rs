@@ -1,5 +1,5 @@
 use crate::utils::client::{CallResult, CommandQuery, QtileClient};
-use crate::utils::graph::ObjectType;
+use crate::utils::graph::{ObjectType, OBJECTS};
 use rustyline::completion::{Completer, Pair};
 use rustyline::config::BellStyle;
 use rustyline::error::ReadlineError;
@@ -684,7 +684,15 @@ impl Repl {
             return;
         }
 
-        // Verify the target exists before committing the navigation.
+        // Class nodes (last segment is a known graph type) have no commands until an
+        // instance is selected, so IPC verification would always fail. Navigate directly.
+        let last = next_obj.last().map(|s| s.as_str()).unwrap_or("root");
+        if OBJECTS.contains(&last) {
+            self.current_object = next_obj;
+            return;
+        }
+
+        // Verify the instance exists before committing navigation.
         let query = CommandQuery::new()
             .object(next_obj.clone())
             .function("commands".to_string());
@@ -1094,6 +1102,20 @@ mod tests {
         repl.handle_cd(&[".."]);
         assert_eq!(repl.current_object, vec!["root"]);
         repl.handle_cd(&["group", "1"]);
+    }
+
+    #[test]
+    fn test_handle_cd_class_node_no_socket() {
+        let mut repl = Repl::new();
+        // cd to a class node must succeed without an IPC socket
+        repl.handle_cd(&["group"]);
+        assert_eq!(repl.current_object, vec!["root", "group"]);
+        repl.handle_cd(&[".."]);
+        assert_eq!(repl.current_object, vec!["root"]);
+        repl.handle_cd(&["screen"]);
+        assert_eq!(repl.current_object, vec!["root", "screen"]);
+        repl.handle_cd(&["/"]);
+        assert_eq!(repl.current_object, vec!["root"]);
     }
 
     #[test]
