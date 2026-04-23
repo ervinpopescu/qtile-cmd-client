@@ -713,10 +713,9 @@ impl Repl {
             .object(next_obj.clone())
             .function("commands".to_string());
 
-        if self.client.call(query).is_ok() {
-            self.current_object = next_obj;
-        } else {
-            println!("Error: Object '{}' not found.", expanded.join("/"));
+        match self.client.call(query) {
+            Ok(_) => self.current_object = next_obj,
+            Err(e) => println!("Error: {e}"),
         }
     }
 

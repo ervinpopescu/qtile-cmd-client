@@ -341,10 +341,9 @@ impl CommandParser {
                                                 ]);
                                             }
                                             Err(_) => {
-                                                selectors.push(vec![
-                                                    Value::String(name.clone()),
-                                                    Value::Null,
-                                                ]);
+                                                bail!(
+                                                    "'{name}' does not accept a string selector (got '{selector}')"
+                                                );
                                             }
                                         }
                                     }
@@ -511,6 +510,27 @@ mod tests {
         assert!(CommandParser::get_object(vec!["unknown".into()]).is_err());
         // Object that doesn't take index
         assert!(CommandParser::get_object(vec!["core".into(), "1".into()]).is_err());
+    }
+
+    #[test]
+    fn test_get_object_rejects_string_selector_for_numeric_only_objects() {
+        // screen, layout, window only accept numeric selectors — string must be rejected
+        let err = CommandParser::get_object(vec!["screen".into(), "o".into()]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("does not accept a string selector"),
+            "expected rejection message, got: {err}"
+        );
+
+        let err2 = CommandParser::get_object(vec!["layout".into(), "bad".into()]).unwrap_err();
+        assert!(err2
+            .to_string()
+            .contains("does not accept a string selector"));
+
+        let err3 = CommandParser::get_object(vec!["window".into(), "title".into()]).unwrap_err();
+        assert!(err3
+            .to_string()
+            .contains("does not accept a string selector"));
     }
 
     #[test]
