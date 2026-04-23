@@ -393,16 +393,32 @@ impl Completer for QtileHelper {
                     }
                 }
             }
+        } else if active_path.len() > 1 {
+            // Path ends on a selector — verify the node exists before offering completions.
+            let verify = CommandQuery::new()
+                .object(active_path.clone())
+                .function("commands".to_string());
+            if self.client.call(verify).is_ok() {
+                let node_type = active_path
+                    .iter()
+                    .rev()
+                    .find(|t| item_class_names.contains(&t.as_str()))
+                    .map(|s| s.as_str())
+                    .unwrap_or("root");
+                let obj = ObjectType::with_none(node_type).unwrap_or(ObjectType::Root);
+                let valid_children = obj.children();
+                for (name, doc) in ITEM_CLASSES {
+                    if valid_children.contains(name) && mode.matches(name, word) {
+                        candidates.push(Pair {
+                            display: format!("{name:<20} {doc}"),
+                            replacement: name.to_string(),
+                        });
+                    }
+                }
+            }
         } else {
-            // Path ends on a selector — find the enclosing node type and offer its children.
-            let node_type = active_path
-                .iter()
-                .rev()
-                .find(|t| item_class_names.contains(&t.as_str()))
-                .map(|s| s.as_str())
-                .unwrap_or("root");
-            let obj = ObjectType::with_none(node_type).unwrap_or(ObjectType::Root);
-            let valid_children = obj.children();
+            // Base path ["root"] — always valid; offer root's children.
+            let valid_children = ObjectType::Root.children();
             for (name, doc) in ITEM_CLASSES {
                 if valid_children.contains(name) && mode.matches(name, word) {
                     candidates.push(Pair {
@@ -721,7 +737,11 @@ impl Repl {
     /// Returns the items to display for a given target path.
     /// - Path ends with an item_class → instances of that class (from Qtile IPC)
     /// - Otherwise → child node types valid for the current node type
-    pub(crate) fn ls_items(&self, target_path: &[String]) -> Vec<String> {
+    /// Returns the items to show for `target_path`, or `None` if the path does not exist.
+    ///
+    /// - `Some(vec)` — path is valid; vec contains child node-type names (possibly empty)
+    /// - `None` — path resolves to a non-existent node (IPC confirms it is absent)
+    pub(crate) fn ls_items(&self, target_path: &[String]) -> Option<Vec<String>> {
         const ITEM_CLASSES: &[&str] = &[
             "bar", "core", "group", "layout", "screen", "widget", "window",
         ];
@@ -752,9 +772,15 @@ impl Repl {
                 }
             }
             instances
-        } else {
-            // Path ends on a selector (e.g. "0", "bottom") — find the enclosing node type
-            // by scanning backward for the last item-class token, then use its known children.
+        } else if target_path.len() > 1 {
+            // Path ends on a selector (e.g. "0", "bottom") — verify the node exists before
+            // returning its static children; an invalid selector must produce no results.
+            let verify = CommandQuery::new()
+                .object(target_path.to_vec())
+                .function("commands".to_string());
+            if self.client.call(verify).is_err() {
+                return None;
+            }
             let node_type = target_path
                 .iter()
                 .rev()
@@ -763,11 +789,18 @@ impl Repl {
                 .unwrap_or("root");
             let obj = ObjectType::with_none(node_type).unwrap_or(ObjectType::Root);
             obj.children().iter().map(|s| s.to_string()).collect()
+        } else {
+            // Base path ["root"] — always valid; return root's children directly.
+            ObjectType::Root
+                .children()
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
         };
 
         items.sort();
         items.dedup();
-        items
+        Some(items)
     }
 
     pub(crate) fn handle_ls(&self, args: &[&str]) -> anyhow::Result<()> {
@@ -775,7 +808,15 @@ impl Repl {
         let expanded = expand_path_args(args);
         apply_segments(&mut target_path, &expanded);
 
-        let items = self.ls_items(&target_path);
+        let Some(items) = self.ls_items(&target_path) else {
+            let path_display = if target_path.len() > 1 {
+                format!("/{}", target_path[1..].join("/"))
+            } else {
+                "/".to_string()
+            };
+            println!("Error: Object '{path_display}' not found.");
+            return Ok(());
+        };
 
         if items.is_empty() {
             println!("(none)");
@@ -887,7 +928,7 @@ mod tests {
     #[test]
     fn test_ls_items_at_root_returns_all_classes() {
         let repl = Repl::new();
-        let items = repl.ls_items(&["root".to_string()]);
+        let items = repl.ls_items(&["root".to_string()]).unwrap();
         // Root can access all node types including core.
         assert!(items.contains(&"bar".to_string()));
         assert!(items.contains(&"group".to_string()));
@@ -896,13 +937,14 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires live Qtile socket"]
     fn test_ls_items_at_instance_returns_classes() {
         let repl = Repl::new();
         let path: Vec<String> = ["root", "group", "www"]
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let items = repl.ls_items(&path);
+        let items = repl.ls_items(&path).unwrap();
         // group children: layout, screen, window
         assert!(items.contains(&"layout".to_string()));
         assert!(items.contains(&"screen".to_string()));
@@ -914,7 +956,7 @@ mod tests {
     #[test]
     fn test_ls_items_sorted_and_deduped() {
         let repl = Repl::new();
-        let items = repl.ls_items(&["root".to_string()]);
+        let items = repl.ls_items(&["root".to_string()]).unwrap();
         let mut sorted = items.clone();
         sorted.sort();
         sorted.dedup();
@@ -925,7 +967,9 @@ mod tests {
     #[ignore = "requires live Qtile socket"]
     fn test_ls_items_item_class_returns_instances() {
         let repl = Repl::new();
-        let items = repl.ls_items(&["root".to_string(), "screen".to_string()]);
+        let items = repl
+            .ls_items(&["root".to_string(), "screen".to_string()])
+            .unwrap();
         assert!(
             !items.is_empty(),
             "screen should have at least one instance"
@@ -939,8 +983,25 @@ mod tests {
     #[ignore = "requires live Qtile socket"]
     fn test_ls_items_group_returns_group_names() {
         let repl = Repl::new();
-        let items = repl.ls_items(&["root".to_string(), "group".to_string()]);
+        let items = repl
+            .ls_items(&["root".to_string(), "group".to_string()])
+            .unwrap();
         assert!(!items.is_empty(), "should have at least one group");
+    }
+
+    #[test]
+    #[ignore = "requires live Qtile socket"]
+    fn test_ls_items_nonexistent_selector_returns_none() {
+        let repl = Repl::new();
+        // "o" is not a valid screen index — ls_items must return None, not static children.
+        let path: Vec<String> = ["root", "screen", "o"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(
+            repl.ls_items(&path).is_none(),
+            "ls_items should return None for a non-existent node"
+        );
     }
 
     #[test]
