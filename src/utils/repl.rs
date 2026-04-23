@@ -688,7 +688,7 @@ impl Repl {
 
     pub(crate) fn handle_cd(&mut self, args: &[&str]) {
         if args.is_empty() {
-            let _ = self.handle_ls(&[]);
+            self.current_object = vec!["root".to_string()];
             return;
         }
 
@@ -1137,6 +1137,14 @@ mod tests {
     #[test]
     fn test_handle_cd_empty_args() {
         let mut repl = Repl::new();
+        repl.handle_cd(&[]);
+        assert_eq!(repl.current_object, vec!["root"]);
+    }
+
+    #[test]
+    fn test_handle_cd_empty_navigates_to_root() {
+        let mut repl = Repl::new();
+        repl.current_object = vec!["root".into(), "screen".into(), "0".into()];
         repl.handle_cd(&[]);
         assert_eq!(repl.current_object, vec!["root"]);
     }
