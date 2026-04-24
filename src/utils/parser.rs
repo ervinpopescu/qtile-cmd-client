@@ -3,7 +3,6 @@ use crate::utils::{
     ipc::Client,
 };
 use anyhow::{bail, Context};
-use itertools::{EitherOrBoth::*, Itertools};
 use serde::{Deserialize, Serialize};
 use serde_json::Number;
 use serde_json::Value;
@@ -27,13 +26,27 @@ impl FromStr for NumberOrString {
     }
 }
 
+/// Converts a string argument to a typed JSON Value.
+/// Tries i64, then f64, then falls back to a JSON string.
+fn string_arg_to_value(s: &str) -> Value {
+    if let Ok(n) = s.parse::<i64>() {
+        return Value::Number(Number::from(n));
+    }
+    if let Ok(f) = s.parse::<f64>() {
+        if let Some(n) = Number::from_f64(f) {
+            return Value::Number(n);
+        }
+    }
+    Value::String(s.to_owned())
+}
+
 /// Represents a parsed Qtile command ready for serialization as a JSON object (new IPC).
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CommandParser {
     pub selectors: Vec<Vec<Value>>,
     #[serde(rename = "name")]
     pub command: String,
-    pub args: Vec<String>,
+    pub args: Vec<Value>,
     pub kwargs: HashMap<String, Value>,
     pub lifted: bool,
 }
@@ -69,7 +82,7 @@ impl CommandParser {
         info: bool,
     ) -> anyhow::Result<CommandAction> {
         let command: String;
-        let mut args_to_be_sent: Vec<String> = vec![];
+        let mut args_to_be_sent: Vec<Value> = vec![];
         let kwargs: HashMap<String, Value> = HashMap::new();
         let lifted = true;
 
@@ -103,7 +116,7 @@ impl CommandParser {
         }
 
         if let Some(args) = args {
-            args_to_be_sent = args;
+            args_to_be_sent = args.iter().map(|s| string_arg_to_value(s)).collect();
         };
 
         Ok(CommandAction::Execute(Self {
@@ -134,7 +147,7 @@ impl CommandParser {
         match result {
             Ok(Value::Array(arr)) => {
                 let obj_string = object_names
-                    .map(|v| v.iter().join(" "))
+                    .map(|v| v.join(" "))
                     .unwrap_or_else(|| "root".to_owned());
                 let prefix = format!("-o {obj_string} -f ");
                 Self::get_commands_help(selectors.to_owned(), prefix, arr)
@@ -151,7 +164,9 @@ impl CommandParser {
         let desc = lines.next().unwrap_or("").trim().to_string();
 
         let start = first.find('(').context("missing '(' in docstring")?;
-        let end = first.find(')').context("missing ')' in docstring")?;
+        // Use rfind to find the *last* ')' so that signatures with nested
+        // parentheses (e.g. default tuple values) are captured in full.
+        let end = first.rfind(')').context("missing ')' in docstring")?;
         let sig = first[start..end + 1].to_string();
         Ok((sig, desc))
     }
@@ -173,7 +188,7 @@ impl CommandParser {
         Ok(format!("{doc_args} {desc}"))
     }
 
-    /// Batches documentation requests for multiple commands into a single 'eval' call for performance.
+    /// Batches documentation requests for multiple commands into a single IPC call for performance.
     fn get_commands_help(
         selectors: Vec<Vec<Value>>,
         prefix: String,
@@ -189,13 +204,22 @@ impl CommandParser {
             .collect::<anyhow::Result<Vec<String>>>()?;
 
         // Use a unique separator to batch docstrings into a single string.
-        // This avoids issues with Python's 'eval()' returning stringified lists.
+        // This avoids issues with Qtile's IPC returning stringified lists.
         let sep = "\u{0001}";
-        let eval_cmd = format!("'{sep}'.join([self.doc(cmd) for cmd in {commands:?}])");
+        // Build a Python list literal from command names, escaping only the two
+        // characters that matter inside Python single-quoted strings: `\` and `'`.
+        let py_list: String = {
+            let escaped: Vec<String> = commands
+                .iter()
+                .map(|c| format!("'{}'", c.replace('\\', "\\\\").replace('\'', "\\'")))
+                .collect();
+            format!("[{}]", escaped.join(", "))
+        };
+        let join_expr = format!("'{sep}'.join([self.doc(cmd) for cmd in {py_list}])");
         let eval_parser = CommandParser {
             selectors: selectors.clone(),
             command: "eval".to_string(),
-            args: vec![eval_cmd],
+            args: vec![Value::String(join_expr)],
             kwargs: HashMap::new(),
             lifted: true,
         };
@@ -241,7 +265,7 @@ impl CommandParser {
         let commands = CommandParser {
             selectors: selectors.clone(),
             command: "doc".to_string(),
-            args: vec![cmd.to_owned()],
+            args: vec![Value::String(cmd.to_owned())],
             kwargs: HashMap::new(),
             lifted: true,
         };
@@ -256,110 +280,111 @@ impl CommandParser {
         }
     }
 
-    /// Recursively parses a list of object identifiers into Qtile selectors.
+    /// Parses a list of object identifiers into Qtile selectors.
+    ///
+    /// The object path alternates between object names and optional selectors:
+    /// `[name, selector, name, selector, ...]` or `[name, name, ...]`.
+    ///
+    /// This implementation uses an explicit index-based loop so the pairing
+    /// logic is unambiguous and there are no hidden "skip" flags.
     fn get_object(mut object: Vec<String>) -> anyhow::Result<Vec<Vec<Value>>> {
         if object.first() == Some(&"root".to_owned()) {
             object.remove(0);
         };
-        if object.len() == 1 && !OBJECTS.iter().any(|o| *o == object[0]) {
-            bail!("No such object \"{object_0}\"", object_0 = object[0]);
-        }
 
         let mut selectors: Vec<Vec<Value>> = Vec::new();
-        let mut parsed_next = false;
+        let mut i = 0;
 
-        if !object.is_empty() {
-            for pair in object.iter().zip_longest(object[1..].iter()) {
-                match pair {
-                    Both(arg0, arg1) => {
-                        if parsed_next {
-                            parsed_next = false;
-                            continue;
-                        }
-                        let arg0_parsed = arg0
+        while i < object.len() {
+            let name_str = &object[i];
+
+            // A bare number at any position where an object name is expected is invalid.
+            let name_parsed = name_str
+                .parse::<NumberOrString>()
+                .map_err(|e| anyhow::anyhow!(e))?;
+
+            match name_parsed {
+                NumberOrString::Uint(n) => {
+                    bail!("Number {n} is not an object")
+                }
+                NumberOrString::String(name) => {
+                    if !OBJECTS.contains(&name.as_str()) {
+                        bail!("No such object \"{name}\"");
+                    }
+
+                    // Peek at the next token to see if it is a selector for this object.
+                    let selector_value = if i + 1 < object.len() {
+                        let next_str = &object[i + 1];
+                        let next_parsed = next_str
                             .parse::<NumberOrString>()
                             .map_err(|e| anyhow::anyhow!(e))?;
-                        let arg1_parsed = arg1
-                            .parse::<NumberOrString>()
-                            .map_err(|e| anyhow::anyhow!(e))?;
 
-                        match arg0_parsed {
-                            NumberOrString::Uint(n) => {
-                                if object.iter().position(|s| *s == n.to_string()) == Some(0) {
-                                    bail!("Number {n} is not an object")
-                                }
-                            }
-                            NumberOrString::String(name) => {
-                                if !OBJECTS.contains(&name.as_str()) {
-                                    bail!("No such object {name}");
-                                }
-
-                                match arg1_parsed {
-                                    NumberOrString::Uint(index) => {
-                                        // Attempt numeric index resolution first
-                                        let obj_type = ObjectType::with_number(&name, index);
-                                        match obj_type {
-                                            Ok(o) => {
-                                                let idx = match o {
-                                                    ObjectType::Layout(i)
-                                                    | ObjectType::Screen(i)
-                                                    | ObjectType::Window(i) => i,
-                                                    _ => None,
-                                                };
-                                                parsed_next = true;
-                                                selectors.push(vec![
-                                                    Value::String(name),
-                                                    idx.map(|i| Value::Number(Number::from(i)))
-                                                        .unwrap_or(Value::Null),
-                                                ]);
-                                            }
-                                            Err(_) => {
-                                                // Fallback to string if number is not supported (e.g. group "1")
-                                                if ObjectType::with_string(&name, index.to_string())
-                                                    .is_ok()
-                                                {
-                                                    parsed_next = true;
-                                                    selectors.push(vec![
-                                                        Value::String(name),
-                                                        Value::String(index.to_string()),
-                                                    ]);
-                                                } else {
-                                                    bail!("Object {name} does not take a numeric index");
-                                                }
-                                            }
+                        match next_parsed {
+                            NumberOrString::Uint(index) => {
+                                // Attempt numeric index resolution first.
+                                let obj_type = ObjectType::with_number(&name, index);
+                                match obj_type {
+                                    Ok(o) => {
+                                        let idx = match o {
+                                            ObjectType::Layout(idx)
+                                            | ObjectType::Screen(idx)
+                                            | ObjectType::Window(idx) => idx,
+                                            _ => None,
+                                        };
+                                        i += 1; // consume the selector token
+                                        idx.map(|n| Value::Number(Number::from(n)))
+                                            .unwrap_or(Value::Null)
+                                    }
+                                    Err(_) => {
+                                        // Fallback: some objects (e.g. group "1") accept numeric
+                                        // strings as string selectors.
+                                        if ObjectType::with_string(&name, index.to_string()).is_ok()
+                                        {
+                                            i += 1; // consume the selector token
+                                            Value::String(index.to_string())
+                                        } else {
+                                            bail!("Object {name} does not take a numeric index");
                                         }
                                     }
-                                    NumberOrString::String(selector) => {
-                                        let obj_type =
-                                            ObjectType::with_string(&name, selector.clone());
-                                        match obj_type {
-                                            Ok(_) => {
-                                                parsed_next = true;
-                                                selectors.push(vec![
-                                                    Value::String(name),
-                                                    Value::String(selector),
-                                                ]);
-                                            }
-                                            Err(_) => {
-                                                bail!(
-                                                    "'{name}' does not accept a string selector (got '{selector}')"
-                                                );
-                                            }
+                                }
+                            }
+                            NumberOrString::String(ref selector) => {
+                                // Only consume the next token as a selector if the object
+                                // accepts string selectors.  If it doesn't, treat the next
+                                // token as the next object name (no selector for this one).
+                                match ObjectType::with_string(&name, selector.clone()) {
+                                    Ok(_) => {
+                                        i += 1; // consume the selector token
+                                        Value::String(selector.clone())
+                                    }
+                                    Err(_) => {
+                                        // The next token is not a valid selector for this object.
+                                        // Check whether it is a known object name (in which case
+                                        // the current object just has no selector), or reject it.
+                                        if OBJECTS.contains(&selector.as_str()) {
+                                            // Next token is an object name — current object gets Null.
+                                            Value::Null
+                                        } else {
+                                            bail!(
+                                                "'{name}' does not accept a string selector (got '{selector}')"
+                                            );
                                         }
                                     }
                                 }
                             }
                         }
-                    }
-                    Left(left) => {
-                        if OBJECTS.contains(&left.as_str()) {
-                            selectors.push(vec![Value::String(left.clone()), Value::Null]);
-                        }
-                    }
-                    Right(_) => {}
+                    } else {
+                        // No following token — object without a selector.
+                        Value::Null
+                    };
+
+                    selectors.push(vec![Value::String(name), selector_value]);
                 }
             }
+
+            i += 1;
         }
+
         Ok(selectors)
     }
 }
@@ -475,6 +500,15 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_docstring_nested_parens() {
+        // Signature with a nested closing paren (default tuple value).
+        // rfind(')') must capture the full signature, not truncate at the first ')'.
+        let doc = "cmd(x: tuple = (0, 0))\nMove to position.";
+        let parsed = CommandParser::parse_docstring(doc, true, false).unwrap();
+        assert_eq!(parsed, "(x: tuple = (0, 0)) Move to position.");
+    }
+
+    #[test]
     fn test_parse_docstring_errors() {
         assert!(CommandParser::parse_docstring("no parens", true, false).is_err());
         assert!(CommandParser::parse_docstring("missing end (", true, false).is_err());
@@ -486,7 +520,7 @@ mod tests {
         let parser = CommandParser {
             selectors: vec![vec![Value::String("group".into()), Value::Null]],
             command: "info".to_string(),
-            args: vec!["arg1".to_string()],
+            args: vec![Value::String("arg1".to_string())],
             kwargs: HashMap::new(),
             lifted: true,
         };
@@ -497,9 +531,40 @@ mod tests {
         assert_eq!(arr.len(), 5);
         assert_eq!(arr[0], serde_json::json!([["group", null]])); // selectors
         assert_eq!(arr[1], Value::String("info".into())); // name
-        assert_eq!(arr[2], serde_json::json!(["arg1"])); // args
+        assert_eq!(arr[2], serde_json::json!(["arg1"])); // args (string stays string)
         assert_eq!(arr[3], serde_json::json!({})); // kwargs
         assert_eq!(arr[4], Value::Bool(true)); // lifted
+    }
+
+    #[test]
+    fn test_to_payload_numeric_args_typed() {
+        // Numeric args supplied as strings must be sent as JSON numbers, not strings.
+        let parser = CommandParser {
+            selectors: vec![],
+            command: "focus_by_index".to_string(),
+            args: vec![Value::Number(2.into())],
+            kwargs: HashMap::new(),
+            lifted: true,
+        };
+        let payload = parser.to_payload().unwrap();
+        let parsed: Value = serde_json::from_str(&payload).unwrap();
+        let arr = parsed.as_array().expect("payload must be a JSON array");
+        // args element must contain the number 2, not the string "2"
+        assert_eq!(arr[2], serde_json::json!([2]));
+    }
+
+    #[test]
+    fn test_string_arg_to_value() {
+        assert_eq!(string_arg_to_value("42"), Value::Number(42.into()));
+        assert_eq!(
+            string_arg_to_value("-5"),
+            Value::Number(Number::from(-5_i64))
+        );
+        assert_eq!(string_arg_to_value("hello"), Value::String("hello".into()));
+        assert_eq!(
+            string_arg_to_value("/path/to/file"),
+            Value::String("/path/to/file".into())
+        );
     }
 
     #[test]
