@@ -188,7 +188,12 @@ fn fuzzy_match(candidate: &str, pattern: &str, max_errors: usize) -> bool {
     let pat: Vec<u8> = pattern.to_ascii_lowercase().into_bytes();
     let mut errors = 0usize;
     let mut ci = 0usize;
-    for &pc in &pat {
+    for (pi, &pc) in pat.iter().enumerate() {
+        if ci >= cand.len() {
+            // Candidate exhausted; all remaining pattern chars count as errors.
+            let remaining = pat.len() - pi;
+            return errors + remaining <= max_errors;
+        }
         match cand[ci..].iter().position(|&cc| cc == pc) {
             Some(offset) => ci += offset + 1,
             None => {
@@ -266,6 +271,10 @@ fn shell_split(input: &str) -> Vec<String> {
             c => current.push(c),
         }
     }
+    if in_single || in_double {
+        println!("Error: unclosed quote");
+        return Vec::new();
+    }
     if !current.is_empty() {
         args.push(current);
     }
@@ -319,16 +328,20 @@ impl Completer for QtileHelper {
         pos: usize,
         _ctx: &Context<'_>,
     ) -> rustyline::Result<(usize, Vec<Pair>)> {
-        let (base_start, full_word) = line[..pos]
+        let (base_start_byte, full_word) = line[..pos]
             .rsplit_once(char::is_whitespace)
             .map(|(pre, word)| (pre.len() + 1, word))
             .unwrap_or((0, &line[..pos]));
+        // rustyline expects a character (Unicode scalar) offset, not a byte offset.
+        let base_start: usize = line[..base_start_byte].chars().count();
 
         // If the word contains '/', treat everything before the last '/' as additional
         // path context and complete only the final component.
         let (start, word, path_in_word) = if let Some(slash_pos) = full_word.rfind('/') {
+            // Convert the byte slash_pos within full_word to a char count.
+            let slash_chars = full_word[..slash_pos].chars().count();
             (
-                base_start + slash_pos + 1,
+                base_start + slash_chars + 1,
                 &full_word[slash_pos + 1..],
                 Some(&full_word[..slash_pos]),
             )
@@ -433,10 +446,10 @@ impl Completer for QtileHelper {
                     .unwrap_or("root");
                 let obj = ObjectType::with_none(node_type).unwrap_or(ObjectType::Root);
                 let valid_children = obj.children();
-                for (name, doc) in ITEM_CLASSES {
+                for (name, _doc) in ITEM_CLASSES {
                     if valid_children.contains(name) && mode.matches(name, word) {
                         candidates.push(Pair {
-                            display: format!("{name:<20} {doc}"),
+                            display: name.to_string(),
                             replacement: name.to_string(),
                         });
                     }
@@ -445,10 +458,10 @@ impl Completer for QtileHelper {
         } else {
             // Base path ["root"] — always valid; offer root's children.
             let valid_children = ObjectType::Root.children();
-            for (name, doc) in ITEM_CLASSES {
+            for (name, _doc) in ITEM_CLASSES {
                 if valid_children.contains(name) && mode.matches(name, word) {
                     candidates.push(Pair {
-                        display: format!("{name:<20} {doc}"),
+                        display: name.to_string(),
                         replacement: name.to_string(),
                     });
                 }
@@ -519,7 +532,25 @@ impl Hinter for QtileHelper {
         if let Ok(CallResult::Value(Value::String(doc))) = self.client.call(doc_query) {
             let first_line = doc.lines().next().unwrap_or("").trim();
             let sig_start = first_line.find('(')?;
-            let sig_end = first_line.find(')')?;
+            // Find the matching closing paren by tracking depth.
+            let sig_end = {
+                let mut depth = 0usize;
+                let mut found = None;
+                for (i, b) in first_line.as_bytes()[sig_start..].iter().enumerate() {
+                    match b {
+                        b'(' => depth += 1,
+                        b')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                found = Some(sig_start + i);
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                found?
+            };
             let sig = &first_line[sig_start..=sig_end];
             let desc = doc.lines().nth(1).unwrap_or("").trim();
             let doc_part = if desc.is_empty() {
@@ -634,15 +665,19 @@ impl Repl {
         println!("Qtile REPL - type 'exit' or 'quit' to leave, 'help' for current object help.");
         println!("Use 'cd <object>' to move through the command graph.");
 
+        // Build the helper once and reuse it across iterations; only current_object changes.
+        rl.set_helper(Some(QtileHelper {
+            client: QtileClient::new(),
+            current_object: self.current_object.clone(),
+            completion_mode: self.completion_mode,
+            hints: self.cfg.editor.hints,
+        }));
+
         loop {
-            // Update helper with current state for completions
-            let helper = QtileHelper {
-                client: QtileClient::new(),
-                current_object: self.current_object.clone(),
-                completion_mode: self.completion_mode,
-                hints: self.cfg.editor.hints,
-            };
-            rl.set_helper(Some(helper));
+            // Sync current_object into the existing helper before each readline call.
+            if let Some(h) = rl.helper_mut() {
+                h.current_object = self.current_object.clone();
+            }
 
             let path_display = if self.current_object == ["root"] {
                 "/".to_string()
@@ -701,9 +736,7 @@ impl Repl {
                 self.handle_cd(&args);
             }
             ".." => {
-                if self.current_object.len() > 1 {
-                    self.current_object.pop();
-                }
+                self.handle_cd(&[".."]);
             }
             "eval" => {
                 if args.is_empty() {
@@ -770,6 +803,7 @@ impl Repl {
     /// Returns the items to display for a given target path.
     /// - Path ends with an item_class → instances of that class (from Qtile IPC)
     /// - Otherwise → child node types valid for the current node type
+    ///
     /// Returns the items to show for `target_path`, or `None` if the path does not exist.
     ///
     /// - `Some(vec)` — path is valid; vec contains child node-type names (possibly empty)
@@ -789,18 +823,22 @@ impl Repl {
                 .function("items".to_string())
                 .args(vec![last.to_string()]);
 
+            // If the IPC call fails (Qtile unreachable), return None rather than Some([]).
+            let res = match self.client.call(query) {
+                Ok(CallResult::Value(Value::Array(r))) => r,
+                Ok(_) => return None,
+                Err(_) => return None,
+            };
             let mut instances = Vec::new();
-            if let Ok(CallResult::Value(Value::Array(res))) = self.client.call(query) {
-                if res.len() >= 2 {
-                    if let Value::Array(arr) = &res[1] {
-                        for inst in arr {
-                            let s = match inst {
-                                Value::String(s) => s.clone(),
-                                Value::Number(n) => n.to_string(),
-                                _ => continue,
-                            };
-                            instances.push(s);
-                        }
+            if res.len() >= 2 {
+                if let Value::Array(arr) = &res[1] {
+                    for inst in arr {
+                        let s = match inst {
+                            Value::String(s) => s.clone(),
+                            Value::Number(n) => n.to_string(),
+                            _ => continue,
+                        };
+                        instances.push(s);
                     }
                 }
             }
