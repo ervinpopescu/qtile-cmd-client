@@ -801,6 +801,7 @@ impl Repl {
     }
 
     /// Returns the items to display for a given target path.
+    ///
     /// - Path ends with an item_class → instances of that class (from Qtile IPC)
     /// - Otherwise → child node types valid for the current node type
     ///

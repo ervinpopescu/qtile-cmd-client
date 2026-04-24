@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 
 /// qtile-cmd-client (qticc) — fast Rust replacement for `qtile cmd-obj`
-#[derive(Parser, Debug, Clone, Default)]
+#[derive(Parser, Debug, Clone)]
 #[command(version, about, long_about = None)]
 pub struct Args {
     #[command(subcommand)]
@@ -30,18 +30,18 @@ pub enum Commands {
         #[arg(short, long, num_args = 1.., default_value=None)]
         /// Specify path to object (space separated).
         ///
-        /// If no --function flag display available commands.
+        /// If no --function flag is given, available commands are listed.
         ///
         /// The root node is selected by default or you can pass `root` explicitly.
         object: Option<Vec<String>>,
-        #[arg(short, long, num_args = 1, default_value = "help")]
+        #[arg(short, long, num_args = 1, default_value = None)]
         /// Select function to execute.
         function: Option<String>,
         #[arg(short, long, num_args = 1.., default_value = None)]
         /// Set arguments supplied to function.
         args: Option<Vec<String>>,
-        #[arg(short, long, num_args = 0)]
-        /// With both `-o`/`--object` and ``-f``/``--function`` args prints documentation for function.
+        #[arg(short, long, num_args = 0, requires = "function")]
+        /// With `-f`/`--function` prints documentation for the named function.
         info: bool,
         #[arg(short, long, num_args = 0)]
         /// Output the result as JSON.
@@ -50,18 +50,6 @@ pub enum Commands {
     /// Start an interactive REPL session.
     #[cfg(feature = "repl")]
     Repl,
-}
-
-impl Default for Commands {
-    fn default() -> Self {
-        Self::CmdObj {
-            object: None,
-            function: Some("help".to_string()),
-            args: None,
-            info: false,
-            json: false,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -127,14 +115,20 @@ mod tests {
     }
 
     #[test]
-    fn test_default_function_is_help() {
-        // The default function must stay "help" — it determines what cmd-obj shows with no flags
-        let args = Args::default();
+    fn test_no_function_flag_yields_none() {
+        // Without -f, function must be None so the parser shows the help listing
+        let args = Args::try_parse_from(["qticc", "cmd-obj"]).unwrap();
         match args.command {
-            Commands::CmdObj { function, .. } => assert_eq!(function, Some("help".into())),
+            Commands::CmdObj { function, .. } => assert_eq!(function, None),
             #[cfg(feature = "repl")]
             _ => panic!("wrong variant"),
         }
+    }
+
+    #[test]
+    fn test_info_requires_function() {
+        // --info without -f must be rejected at parse time
+        assert!(Args::try_parse_from(["qticc", "cmd-obj", "--info"]).is_err());
     }
 
     #[test]

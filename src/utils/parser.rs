@@ -94,10 +94,7 @@ impl CommandParser {
 
         match function {
             Some(ref s) => {
-                if "help" == s.as_str() {
-                    let help = Self::get_help(&selectors, None)?;
-                    return Ok(CommandAction::Help(help));
-                } else if info {
+                if info {
                     let info_cmd = s.to_owned();
                     let info_text = format!(
                         "{} {}",
@@ -616,14 +613,14 @@ mod tests {
             panic!("Expected Execute action");
         }
 
-        // Help action
-        let action_help =
-            CommandParser::from_params(None, Some("help".into()), None, false).unwrap();
-        assert!(matches!(action_help, CommandAction::Help(_)));
-
-        // Implicit help (no function)
+        // Help action (no function provided)
         let action_no_func = CommandParser::from_params(None, None, None, false).unwrap();
         assert!(matches!(action_no_func, CommandAction::Help(_)));
+
+        // A function literally named "help" must be dispatched as Execute, not intercepted
+        let action_help =
+            CommandParser::from_params(None, Some("help".into()), None, false).unwrap();
+        assert!(matches!(action_help, CommandAction::Execute(_)));
 
         // Info action
         let action_info =
