@@ -120,9 +120,10 @@ mod tests {
     #[test]
     #[allow(irrefutable_let_patterns)]
     fn test_args_defaults() {
-        let args = Args::default();
+        // Without -f, function is None — the parser handles showing available commands
+        let args = Args::try_parse_from(["qticc", "cmd-obj"]).unwrap();
         if let Commands::CmdObj { function, .. } = args.command {
-            assert_eq!(function, Some("help".to_string()));
+            assert_eq!(function, None);
         } else {
             panic!("Expected CmdObj default");
         }
