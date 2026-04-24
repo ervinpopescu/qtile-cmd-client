@@ -79,12 +79,14 @@ impl CommandParser {
         object: Option<Vec<String>>,
         function: Option<String>,
         args: Option<Vec<String>>,
+        kwargs: Option<HashMap<String, Value>>,
+        lifted: Option<bool>,
         info: bool,
     ) -> anyhow::Result<CommandAction> {
         let command: String;
         let mut args_to_be_sent: Vec<Value> = vec![];
-        let kwargs: HashMap<String, Value> = HashMap::new();
-        let lifted = true;
+        let kwargs: HashMap<String, Value> = kwargs.unwrap_or_default();
+        let lifted = lifted.unwrap_or(true);
 
         let selectors = if let Some(v) = object {
             Self::get_object(v)?
@@ -603,6 +605,8 @@ mod tests {
             Some(vec!["group".into()]),
             Some("info".into()),
             None,
+            None,
+            None,
             false,
         )
         .unwrap();
@@ -614,17 +618,19 @@ mod tests {
         }
 
         // Help action (no function provided)
-        let action_no_func = CommandParser::from_params(None, None, None, false).unwrap();
+        let action_no_func =
+            CommandParser::from_params(None, None, None, None, None, false).unwrap();
         assert!(matches!(action_no_func, CommandAction::Help(_)));
 
         // A function literally named "help" must be dispatched as Execute, not intercepted
         let action_help =
-            CommandParser::from_params(None, Some("help".into()), None, false).unwrap();
+            CommandParser::from_params(None, Some("help".into()), None, None, None, false).unwrap();
         assert!(matches!(action_help, CommandAction::Execute(_)));
 
         // Info action
         let action_info =
-            CommandParser::from_params(None, Some("status".into()), None, true).unwrap();
+            CommandParser::from_params(None, Some("status".into()), None, None, None, true)
+                .unwrap();
         assert!(matches!(action_info, CommandAction::Help(_)));
     }
 

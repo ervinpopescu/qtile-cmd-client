@@ -3,7 +3,7 @@ use super::{
     parser::{CommandAction, CommandParser},
 };
 use serde_json::Value;
-use std::fmt;
+use std::{collections::HashMap, fmt};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CallResult {
@@ -55,6 +55,8 @@ pub struct CommandQuery {
     pub object: Option<Vec<String>>,
     pub function: Option<String>,
     pub args: Option<Vec<String>>,
+    pub kwargs: Option<HashMap<String, Value>>,
+    pub lifted: Option<bool>,
     pub info: bool,
 }
 
@@ -82,6 +84,20 @@ impl CommandQuery {
         self
     }
 
+    /// Sets the keyword arguments for the function call.
+    pub fn kwargs(mut self, kwargs: HashMap<String, Value>) -> Self {
+        self.kwargs = Some(kwargs);
+        self
+    }
+
+    /// Sets the `lifted` flag for the IPC payload.
+    ///
+    /// When `true` (the default), Qtile will "lift" the response out of its envelope.
+    pub fn lifted(mut self, lifted: bool) -> Self {
+        self.lifted = Some(lifted);
+        self
+    }
+
     /// Sets whether to fetch documentation for the function.
     pub fn info(mut self, info: bool) -> Self {
         self.info = info;
@@ -101,8 +117,14 @@ impl QtileClient {
 
     /// Executes a command or fetches help text based on the provided [`CommandQuery`].
     pub fn call(&self, query: CommandQuery) -> anyhow::Result<CallResult> {
-        let action =
-            CommandParser::from_params(query.object, query.function, query.args, query.info)?;
+        let action = CommandParser::from_params(
+            query.object,
+            query.function,
+            query.args,
+            query.kwargs,
+            query.lifted,
+            query.info,
+        )?;
         match action {
             CommandAction::Execute(c) => {
                 let data = c.to_payload()?;
@@ -117,6 +139,16 @@ impl QtileClient {
     #[allow(dead_code)]
     pub fn call_root<S: Into<String>>(&self, function: S) -> anyhow::Result<CallResult> {
         self.call(CommandQuery::new().function(function.into()))
+    }
+
+    /// Convenience method to call a function on the root object with positional arguments.
+    #[allow(dead_code)]
+    pub fn call_root_with_args<S: Into<String>>(
+        &self,
+        function: S,
+        args: Vec<String>,
+    ) -> anyhow::Result<CallResult> {
+        self.call(CommandQuery::new().function(function.into()).args(args))
     }
 }
 
@@ -140,6 +172,20 @@ mod tests {
         assert_eq!(query.function, Some("info".to_string()));
         assert_eq!(query.args, Some(vec!["short".to_string()]));
         assert!(query.info);
+        assert_eq!(query.kwargs, None);
+        assert_eq!(query.lifted, None);
+    }
+
+    #[test]
+    fn test_command_query_kwargs_and_lifted() {
+        let mut kw = HashMap::new();
+        kw.insert("x".to_string(), json!(100));
+        kw.insert("y".to_string(), json!(200));
+
+        let query = CommandQuery::new().kwargs(kw.clone()).lifted(false);
+
+        assert_eq!(query.kwargs, Some(kw));
+        assert_eq!(query.lifted, Some(false));
     }
 
     #[test]

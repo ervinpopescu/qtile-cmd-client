@@ -64,7 +64,7 @@ pub enum ObjectType {
     ///
     /// Widgets can access the parent bar and screen via the command graph.
     ///
-    /// Has a required name
+    /// Can have an optional name
     Widget(Option<String>),
     /// The backend core is the link between the Qtile objects (windows, layouts, groups etc.) and the specific backend (X11 or Wayland). This core should be largely invisible to users and, as a result, these objects do not expose many commands.
     ///
@@ -82,6 +82,7 @@ pub enum ObjectType {
 impl ObjectType {
     /// For:
     /// - [`Bar`](ObjectType::Bar)
+    /// - [`Group`](ObjectType::Group)
     /// - [`Widget`](ObjectType::Widget)
     pub fn with_string(string: &str, s: String) -> anyhow::Result<ObjectType> {
         match string {
@@ -93,9 +94,10 @@ impl ObjectType {
     }
     /// For:
     /// - [`Screen`](ObjectType::Screen)
-    /// - [`Group`](ObjectType::Group)
     /// - [`Layout`](ObjectType::Layout)
     /// - [`Window`](ObjectType::Window)
+    ///
+    /// Note: [`Group`](ObjectType::Group) uses a string selector and is handled by [`with_string`](ObjectType::with_string).
     pub fn with_number(string: &str, n: u32) -> anyhow::Result<ObjectType> {
         match string {
             "screen" => Ok(Self::Screen(Some(n))),
