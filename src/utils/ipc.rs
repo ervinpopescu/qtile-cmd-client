@@ -1,12 +1,25 @@
 use std::{
-    io::{Read, Write},
+    io::{self, Read, Write},
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 use anyhow::{bail, Context};
 use serde_json::{json, Value};
 use shellexpand::tilde;
+
+/// Per-syscall read timeout used with `set_read_timeout`. Kept short so that
+/// the manual read loop can poll the overall `READ_TOTAL_TIMEOUT` deadline.
+const READ_SYSCALL_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Overall deadline for reading the full response. Requests that produce large
+/// responses (e.g. `eval`, `doc`) may need longer than the legacy 5-second cap.
+const READ_TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Timeout applied to `write_all` so that a hung Qtile process cannot stall
+/// `qticc` indefinitely.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Discovers the Qtile socket file path by checking the following in order:
 /// 1.  An explicitly provided display name.
@@ -68,9 +81,14 @@ impl Client {
         let sockfile = path.unwrap_or_else(|| find_sockfile(None));
         let stream = UnixStream::connect(&sockfile)
             .with_context(|| format!("could not connect to socket: {sockfile:?}"))?;
+        // Issue 4 / Issue 1: use named constants; set both read and write timeouts.
+        // The read timeout is per-syscall; the manual read loop enforces the total deadline.
         stream
-            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .set_read_timeout(Some(READ_SYSCALL_TIMEOUT))
             .context("Could not set read timeout on the stream")?;
+        stream
+            .set_write_timeout(Some(WRITE_TIMEOUT))
+            .context("Could not set write timeout on the stream")?;
         Ok(Self { stream })
     }
 
@@ -78,13 +96,50 @@ impl Client {
     pub fn send_request(data: String) -> anyhow::Result<String> {
         let mut client = Self::connect()?;
         client.stream.write_all(data.as_bytes())?;
-        client
-            .stream
-            .shutdown(std::net::Shutdown::Write)
-            .context("Could not shutdown writing on the stream")?;
-        let mut response = String::new();
-        client.stream.read_to_string(&mut response)?;
-        Ok(response)
+
+        // Issue 2: ENOTCONN / BrokenPipe from shutdown means the server already closed
+        // its end — the write was already received, so this is harmless. Only propagate
+        // unexpected errors.
+        match client.stream.shutdown(std::net::Shutdown::Write) {
+            Ok(()) => {}
+            Err(e)
+                if e.kind() == io::ErrorKind::NotConnected
+                    || e.kind() == io::ErrorKind::BrokenPipe =>
+            {
+                // Server closed first; the payload was already delivered.
+            }
+            Err(e) => return Err(e).context("Could not shutdown writing on the stream"),
+        }
+
+        // Issue 3 / Issue 6: use a manual read loop into Vec<u8> so that a per-syscall
+        // WouldBlock/TimedOut does not discard buffered bytes, and so that non-UTF-8
+        // responses produce a clear error instead of an opaque io::Error.
+        let mut buf = [0u8; 4096];
+        let mut raw: Vec<u8> = Vec::new();
+        let deadline = Instant::now() + READ_TOTAL_TIMEOUT;
+        loop {
+            match client.stream.read(&mut buf) {
+                Ok(0) => break, // EOF
+                Ok(n) => raw.extend_from_slice(&buf[..n]),
+                Err(e)
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        || e.kind() == io::ErrorKind::TimedOut =>
+                {
+                    if !raw.is_empty() {
+                        // We have data and the timeout fired — treat as EOF.
+                        break;
+                    }
+                    if Instant::now() >= deadline {
+                        bail!("ipc: timed out waiting for response after {READ_TOTAL_TIMEOUT:?}");
+                    }
+                    // No data yet; keep waiting.
+                }
+                Err(e) => return Err(e).context("ipc: error reading response"),
+            }
+        }
+
+        // Issue 6: explicit UTF-8 validation with a clear error message.
+        String::from_utf8(raw).context("ipc: response is not valid UTF-8")
     }
 
     /// Legacy wrapper for backward compatibility.
@@ -98,11 +153,28 @@ impl Client {
         let response = response?;
         let mut s: Value = serde_json::from_str(&response).context("ipc.Client: invalid JSON")?;
 
-        // Handle enveloped 'reply' message if present (new JSON IPC)
+        // Handle enveloped message if present (new JSON IPC).
+        // Issue 5: if message_type is present but not "reply", surface it explicitly
+        // rather than falling through to the status/result extraction which will fail
+        // with a confusing "missing 'status'" error.
         if let Value::Object(ref mut map) = s {
-            if map.get("message_type") == Some(&json!("reply")) {
-                if let Some(content) = map.remove("content") {
-                    s = content;
+            if map.contains_key("message_type") {
+                if map.get("message_type") == Some(&json!("reply")) {
+                    if let Some(content) = map.remove("content") {
+                        s = content;
+                    }
+                } else {
+                    let msg_type = map
+                        .get("message_type")
+                        .map(|v| v.to_string())
+                        .unwrap_or_default();
+                    let content = map
+                        .get("content")
+                        .map(|v| v.to_string())
+                        .unwrap_or_default();
+                    bail!(
+                        "ipc.Client: unexpected envelope message_type={msg_type} content={content}"
+                    );
                 }
             }
         }
@@ -166,9 +238,15 @@ impl Client {
         match result {
             Value::String(s) => format!("ipc.Client: response_code = {code}:\n{s}"),
             Value::Array(arr) => {
+                // Issue 7: preserve non-string values (numbers, booleans, objects, null)
+                // by falling back to JSON rendering instead of silently discarding them.
                 let msg = arr
                     .iter()
-                    .map(|v| v.as_str().unwrap_or(""))
+                    .map(|v| {
+                        v.as_str()
+                            .map(String::from)
+                            .unwrap_or_else(|| v.to_string())
+                    })
                     .collect::<Vec<_>>()
                     .join("");
                 format!("ipc.Client: response_code = {code}:\n{msg}")
