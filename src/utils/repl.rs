@@ -1012,10 +1012,11 @@ mod tests {
     #[ignore = "requires live Qtile socket"]
     fn test_ls_items_at_instance_returns_classes() {
         let repl = Repl::new();
-        let path: Vec<String> = ["root", "group", "www"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let groups = repl
+            .ls_items(&["root".to_string(), "group".to_string()])
+            .expect("should be able to list groups from live Qtile");
+        let group_name = groups.first().expect("at least one group must exist");
+        let path = vec!["root".to_string(), "group".to_string(), group_name.clone()];
         let items = repl.ls_items(&path).unwrap();
         // group children: layout, screen, window
         assert!(items.contains(&"layout".to_string()));

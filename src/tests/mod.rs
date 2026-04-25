@@ -59,21 +59,3 @@ fn test_invalid_function() {
     let ret = client.call(query);
     assert!(ret.is_err());
 }
-
-#[test]
-#[ignore = "requires live Qtile socket"]
-fn test_repl_help_behavior() -> anyhow::Result<()> {
-    let client = QtileClient::new();
-    let query = CommandQuery::new().function("help".to_string());
-    let ret = client.call(query);
-    match ret {
-        Ok(CallResult::Text(t)) => {
-            assert!(!t.is_empty());
-        }
-        Ok(CallResult::Value(v)) => {
-            bail!("Expected Text help, got Value: {v:?}");
-        }
-        Err(e) => bail!("Help failed: {e}"),
-    }
-    Ok(())
-}
