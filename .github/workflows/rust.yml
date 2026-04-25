@@ -24,6 +24,7 @@ env:
   # Tool paths
   UV_INSTALL_DIR: "/opt/hostedtoolcache/uv"
   UV_CACHE_DIR: "/opt/hostedtoolcache/uv-cache"
+  UV_PYTHON_INSTALL_DIR: "/opt/hostedtoolcache/uv-python"
   WAYLAND_INSTALL_DIR: "/opt/hostedtoolcache/qtile-deps/wayland/install"
   PKG_CONFIG_PATH: "/opt/hostedtoolcache/qtile-deps/wayland/install/lib/pkgconfig:/opt/hostedtoolcache/qtile-deps/wayland/install/share/pkgconfig"
   LD_LIBRARY_PATH: "/opt/hostedtoolcache/qtile-deps/wayland/install/lib"
