@@ -1,5 +1,3 @@
-#![cfg(feature = "framing")]
-
 use crate::utils::ipc::Client;
 use serde_json::json;
 use std::io::{Read, Write};
