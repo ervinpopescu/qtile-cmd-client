@@ -232,4 +232,29 @@ mod tests {
         let text_res = CallResult::Text("plain text".to_string());
         assert_eq!(format!("{}", text_res), "plain text");
     }
+
+    #[test]
+    fn test_qtile_client_default() {
+        let _client = QtileClient::default();
+        #[cfg(feature = "framing")]
+        assert!(!_client.framed());
+    }
+
+    #[cfg(feature = "framing")]
+    #[test]
+    fn test_qtile_client_framed_getter() {
+        let client = QtileClient::new(true);
+        assert!(client.framed());
+        let client_unframed = QtileClient::new(false);
+        assert!(!client_unframed.framed());
+    }
+
+    #[test]
+    fn test_call_root_helpers_fail_without_socket() {
+        let client = QtileClient::new(false);
+        assert!(client.call_root("status").is_err());
+        assert!(client
+            .call_root_with_args("status", vec!["arg".to_string()])
+            .is_err());
+    }
 }
