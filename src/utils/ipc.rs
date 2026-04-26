@@ -517,4 +517,153 @@ mod tests {
         let path = Some(PathBuf::from("/nonexistent/path/qtile/qtilesocket.:0"));
         assert!(Client::connect_with_path(path).is_err());
     }
+
+    #[test]
+    fn test_find_sockfile_no_display_falls_back_to_wayland0() {
+        // When display, wayland, and x11 are all None and no socket files exist,
+        // the scanner exhausts all defaults and falls back to wayland-0.
+        let sock = find_sockfile_with_env(
+            None,
+            Some("/tmp/qtile-test-no-socket-000".to_string()),
+            None,
+            None,
+        );
+        assert!(sock.to_str().unwrap().ends_with("qtilesocket.wayland-0"));
+    }
+
+    #[test]
+    fn test_send_fails_without_socket() {
+        // send() is a legacy wrapper; verify it propagates connect errors.
+        let result = Client::send("/nonexistent".to_string());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_match_response_unexpected_message_type() {
+        let payload = json!({
+            "message_type": "error",
+            "content": {"detail": "bad"}
+        });
+        let response = serde_json::to_string(&payload).unwrap();
+        let result = Client::match_response(Ok(response), false);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("unexpected envelope message_type"));
+    }
+
+    #[test]
+    fn test_match_response_legacy_single_element_ok() {
+        // Array with status=0 and no second element → result is null.
+        let result = Client::match_response(Ok("[0]".to_string()), false);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Value::Null);
+    }
+
+    #[test]
+    fn test_match_response_legacy_non_number_status() {
+        let result = Client::match_response(Ok(r#"["bad_status"]"#.to_string()), false);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("status is not a number"));
+    }
+
+    #[test]
+    fn test_match_response_unknown_top_level_type() {
+        let result = Client::match_response(Ok("\"just_a_string\"".to_string()), false);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Unknown top-level"));
+    }
+
+    #[test]
+    fn test_match_response_error_result_array() {
+        // format_error_result with an array of strings.
+        let resp = json!({"status": 1, "result": ["error", " details"]}).to_string();
+        let result = Client::match_response(Ok(resp), false);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("error details"), "got: {msg}");
+
+        // format_error_result with an array containing a non-string element.
+        let resp_mixed = json!({"status": 1, "result": ["msg", 42]}).to_string();
+        let result_mixed = Client::match_response(Ok(resp_mixed), false);
+        assert!(result_mixed.is_err());
+        let msg_mixed = result_mixed.unwrap_err().to_string();
+        assert!(msg_mixed.contains("msg42"), "got: {msg_mixed}");
+    }
+
+    #[test]
+    fn test_match_response_error_result_object_no_error_key() {
+        // format_error_result with an object that has no "error" key falls back to JSON.
+        let resp = json!({"status": 1, "result": {"detail": "some info"}}).to_string();
+        let result = Client::match_response(Ok(resp), false);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("detail"), "got: {msg}");
+    }
+
+    #[cfg(feature = "framing")]
+    #[test]
+    fn test_send_request_framed_success() {
+        use std::io::{Read, Write};
+        use std::os::unix::net::UnixListener;
+        use std::thread;
+
+        let tmp = std::env::temp_dir();
+        let unique = std::process::id();
+        let qtile_dir = tmp.join(format!("qtile-frame-test-{unique}"));
+        let display_name = format!("framing-{unique}");
+        let socket_path = qtile_dir.join(format!("qtilesocket.{display_name}"));
+        std::fs::create_dir_all(&qtile_dir).unwrap();
+
+        let listener = UnixListener::bind(&socket_path).unwrap();
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut header = [0u8; 4];
+            stream.read_exact(&mut header).unwrap();
+            let len = u32::from_be_bytes(header) as usize;
+            let mut body = vec![0u8; len];
+            stream.read_exact(&mut body).unwrap();
+            // Reply with a minimal framed response
+            let reply = r#"[0,"ok"]"#;
+            let reply_bytes = reply.as_bytes();
+            stream
+                .write_all(&(reply_bytes.len() as u32).to_be_bytes())
+                .unwrap();
+            stream.write_all(reply_bytes).unwrap();
+        });
+
+        let prev_xdg = std::env::var("XDG_CACHE_HOME").ok();
+        let prev_wayland = std::env::var("WAYLAND_DISPLAY").ok();
+        std::env::set_var("XDG_CACHE_HOME", &qtile_dir.parent().unwrap());
+        std::env::set_var("WAYLAND_DISPLAY", &display_name);
+
+        let result = Client::send_request(r#"[[], "status", [], {}, true]"#.to_string(), true);
+
+        match prev_xdg {
+            Some(v) => std::env::set_var("XDG_CACHE_HOME", v),
+            None => std::env::remove_var("XDG_CACHE_HOME"),
+        }
+        match prev_wayland {
+            Some(v) => std::env::set_var("WAYLAND_DISPLAY", v),
+            None => std::env::remove_var("WAYLAND_DISPLAY"),
+        }
+
+        server.join().unwrap();
+        std::fs::remove_dir_all(&qtile_dir).ok();
+
+        assert!(
+            result.is_ok(),
+            "Framed send_request should succeed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), r#"[0,"ok"]"#);
+    }
 }

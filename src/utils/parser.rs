@@ -574,6 +574,26 @@ mod tests {
             string_arg_to_value("/path/to/file"),
             Value::String("/path/to/file".into())
         );
+        // Float values that can't be parsed as i64 fall through to f64.
+        assert_eq!(
+            string_arg_to_value("3.14"),
+            Value::Number(Number::from_f64(3.14).unwrap())
+        );
+        // NaN and Infinity are not valid JSON numbers; they fall back to string.
+        assert_eq!(string_arg_to_value("nan"), Value::String("nan".into()));
+    }
+
+    #[test]
+    fn test_get_object_string_selector_skipped_when_next_is_object_name() {
+        // "screen" doesn't accept string selectors. When the following token is a
+        // known object name ("group"), it is treated as the next object, not a
+        // selector, so screen receives Value::Null.
+        let selectors = CommandParser::get_object(vec!["screen".into(), "group".into()]).unwrap();
+        assert_eq!(selectors.len(), 2);
+        assert_eq!(selectors[0][0], Value::String("screen".into()));
+        assert_eq!(selectors[0][1], Value::Null);
+        assert_eq!(selectors[1][0], Value::String("group".into()));
+        assert_eq!(selectors[1][1], Value::Null);
     }
 
     #[test]
