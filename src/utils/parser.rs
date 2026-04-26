@@ -635,7 +635,8 @@ mod tests {
 
         // A function literally named "help" must be dispatched as Execute, not intercepted
         let action_help =
-            CommandParser::from_params(None, Some("help".into()), None, None, None, false, false).unwrap();
+            CommandParser::from_params(None, Some("help".into()), None, None, None, false, false)
+                .unwrap();
         assert!(matches!(action_help, CommandAction::Execute(_)));
 
         // Info action
