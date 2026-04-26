@@ -576,8 +576,8 @@ mod tests {
         );
         // Float values that can't be parsed as i64 fall through to f64.
         assert_eq!(
-            string_arg_to_value("3.14"),
-            Value::Number(Number::from_f64(3.14).unwrap())
+            string_arg_to_value("1.5"),
+            Value::Number(Number::from_f64(1.5).unwrap())
         );
         // NaN and Infinity are not valid JSON numbers; they fall back to string.
         assert_eq!(string_arg_to_value("nan"), Value::String("nan".into()));

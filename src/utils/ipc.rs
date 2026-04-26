@@ -642,7 +642,7 @@ mod tests {
 
         let prev_xdg = std::env::var("XDG_CACHE_HOME").ok();
         let prev_wayland = std::env::var("WAYLAND_DISPLAY").ok();
-        std::env::set_var("XDG_CACHE_HOME", &qtile_dir.parent().unwrap());
+        std::env::set_var("XDG_CACHE_HOME", qtile_dir.parent().unwrap());
         std::env::set_var("WAYLAND_DISPLAY", &display_name);
 
         let result = Client::send_request(r#"[[], "status", [], {}, true]"#.to_string(), true);
