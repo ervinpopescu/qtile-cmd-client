@@ -109,6 +109,17 @@ impl Client {
                     return Self::try_send_request(data, true);
                 }
             }
+            return res;
+        }
+        // If framing failed at the transport level (I/O error), the server likely uses the
+        // legacy protocol (no framing support). Retry without framing.
+        if let Err(ref e) = res {
+            let is_io = e
+                .chain()
+                .any(|cause| cause.downcast_ref::<io::Error>().is_some());
+            if is_io {
+                return Self::try_send_request(data, false);
+            }
         }
         res
     }
