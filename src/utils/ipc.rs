@@ -617,8 +617,11 @@ mod tests {
 
         let tmp = std::env::temp_dir();
         let unique = std::process::id();
-        let qtile_dir = tmp.join(format!("qtile-frame-test-{unique}"));
         let display_name = format!("framing-{unique}");
+        // Discovery builds $XDG_CACHE_HOME/qtile/qtilesocket.<display>, so the
+        // listener must be bound inside that exact path.
+        let cache_dir = tmp.join(format!("qtile-frame-test-{unique}"));
+        let qtile_dir = cache_dir.join("qtile");
         let socket_path = qtile_dir.join(format!("qtilesocket.{display_name}"));
         std::fs::create_dir_all(&qtile_dir).unwrap();
 
@@ -642,7 +645,7 @@ mod tests {
 
         let prev_xdg = std::env::var("XDG_CACHE_HOME").ok();
         let prev_wayland = std::env::var("WAYLAND_DISPLAY").ok();
-        std::env::set_var("XDG_CACHE_HOME", qtile_dir.parent().unwrap());
+        std::env::set_var("XDG_CACHE_HOME", &cache_dir);
         std::env::set_var("WAYLAND_DISPLAY", &display_name);
 
         let result = Client::send_request(r#"[[], "status", [], {}, true]"#.to_string(), true);
@@ -657,7 +660,7 @@ mod tests {
         }
 
         server.join().unwrap();
-        std::fs::remove_dir_all(&qtile_dir).ok();
+        std::fs::remove_dir_all(&cache_dir).ok();
 
         assert!(
             result.is_ok(),
