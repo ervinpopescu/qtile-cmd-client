@@ -251,10 +251,31 @@ mod tests {
 
     #[test]
     fn test_call_root_helpers_fail_without_socket() {
+        let prev_xdg = std::env::var("XDG_CACHE_HOME").ok();
+        let prev_wayland = std::env::var("WAYLAND_DISPLAY").ok();
+        let prev_display = std::env::var("DISPLAY").ok();
+        std::env::set_var("XDG_CACHE_HOME", "/tmp/qtile-no-such-cache-dir-test");
+        std::env::set_var("WAYLAND_DISPLAY", "no-such-display-99");
+        std::env::remove_var("DISPLAY");
+
         let client = QtileClient::new(false);
-        assert!(client.call_root("status").is_err());
-        assert!(client
-            .call_root_with_args("status", vec!["arg".to_string()])
-            .is_err());
+        let r1 = client.call_root("status");
+        let r2 = client.call_root_with_args("status", vec!["arg".to_string()]);
+
+        match prev_xdg {
+            Some(v) => std::env::set_var("XDG_CACHE_HOME", v),
+            None => std::env::remove_var("XDG_CACHE_HOME"),
+        }
+        match prev_wayland {
+            Some(v) => std::env::set_var("WAYLAND_DISPLAY", v),
+            None => std::env::remove_var("WAYLAND_DISPLAY"),
+        }
+        match prev_display {
+            Some(v) => std::env::set_var("DISPLAY", v),
+            None => std::env::remove_var("DISPLAY"),
+        }
+
+        assert!(r1.is_err());
+        assert!(r2.is_err());
     }
 }
