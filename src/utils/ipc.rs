@@ -533,8 +533,28 @@ mod tests {
 
     #[test]
     fn test_send_fails_without_socket() {
-        // send() is a legacy wrapper; verify it propagates connect errors.
-        let result = Client::send("/nonexistent".to_string());
+        let prev_xdg = std::env::var("XDG_CACHE_HOME").ok();
+        let prev_wayland = std::env::var("WAYLAND_DISPLAY").ok();
+        let prev_display = std::env::var("DISPLAY").ok();
+        std::env::set_var("XDG_CACHE_HOME", "/tmp/qtile-no-such-cache-send-test");
+        std::env::set_var("WAYLAND_DISPLAY", "no-such-display-send-99");
+        std::env::remove_var("DISPLAY");
+
+        let result = Client::send("{}".to_string());
+
+        match prev_xdg {
+            Some(v) => std::env::set_var("XDG_CACHE_HOME", v),
+            None => std::env::remove_var("XDG_CACHE_HOME"),
+        }
+        match prev_wayland {
+            Some(v) => std::env::set_var("WAYLAND_DISPLAY", v),
+            None => std::env::remove_var("WAYLAND_DISPLAY"),
+        }
+        match prev_display {
+            Some(v) => std::env::set_var("DISPLAY", v),
+            None => std::env::remove_var("DISPLAY"),
+        }
+
         assert!(result.is_err());
     }
 
