@@ -136,6 +136,9 @@ impl Client {
                 });
                 let framed_data = serde_json::to_string(&payload)?;
                 client.write_frame(framed_data.as_bytes())?;
+                // Shutdown write so legacy servers that read-until-EOF don't
+                // deadlock waiting for more data while we wait for a reply.
+                let _ = client.stream.shutdown(std::net::Shutdown::Write);
                 let bytes = client.read_frame()?;
                 return String::from_utf8(bytes).context("frame payload is not valid UTF-8");
             }
