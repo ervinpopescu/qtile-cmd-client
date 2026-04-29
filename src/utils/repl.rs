@@ -12,6 +12,15 @@ use serde_json::Value;
 use std::borrow::Cow;
 use std::path::PathBuf;
 
+// ── ANSI colors ──────────────────────────────────────────────────────────────
+
+const RESET: &str = "\x1b[0m";
+const BOLD: &str = "\x1b[1m";
+const DIM: &str = "\x1b[2m";
+const CYAN: &str = "\x1b[36m";
+const YELLOW: &str = "\x1b[33m";
+const RED: &str = "\x1b[31m";
+
 // ── Config ──────────────────────────────────────────────────────────────────
 
 /// Persistent REPL configuration loaded from `$XDG_CONFIG_HOME/qticc/config.toml`.
@@ -272,7 +281,7 @@ fn shell_split(input: &str) -> Vec<String> {
         }
     }
     if in_single || in_double {
-        println!("Error: unclosed quote");
+        println!("{RED}Error: unclosed quote{RESET}");
         return Vec::new();
     }
     if !current.is_empty() {
@@ -579,15 +588,32 @@ impl Highlighter for QtileHelper {
         prompt: &'p str,
         _default: bool,
     ) -> Cow<'b, str> {
-        Cow::Borrowed(prompt)
+        // prompt is "{path_display} > " — color the path cyan and > bold
+        if let Some(sep) = prompt.rfind(" > ") {
+            let path = &prompt[..sep];
+            Cow::Owned(format!("{CYAN}{path}{RESET} {BOLD}>{RESET} "))
+        } else {
+            Cow::Borrowed(prompt)
+        }
     }
 
     fn highlight_hint<'h>(&self, hint: &'h str) -> Cow<'h, str> {
-        Cow::Borrowed(hint)
+        Cow::Owned(format!("{DIM}{hint}{RESET}"))
     }
 
     fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
-        Cow::Borrowed(line)
+        if line.is_empty() {
+            return Cow::Borrowed(line);
+        }
+        const BUILTINS: &[&str] = &["cd", "ls", "exit", "quit", "eval", "..", "/"];
+        let word_end = line.find(char::is_whitespace).unwrap_or(line.len());
+        let first = &line[..word_end];
+        let rest = &line[word_end..];
+        if BUILTINS.contains(&first) {
+            Cow::Owned(format!("{YELLOW}{first}{RESET}{rest}"))
+        } else {
+            Cow::Owned(format!("{CYAN}{first}{RESET}{rest}"))
+        }
     }
 
     fn highlight_char(
@@ -707,7 +733,7 @@ impl Repl {
                     break;
                 }
                 Err(err) => {
-                    println!("Error: {err:?}");
+                    println!("{RED}Error: {err:?}{RESET}");
                     break;
                 }
             }
@@ -729,7 +755,7 @@ impl Repl {
             "exit" | "quit" => return true,
             "ls" => {
                 if let Err(e) = self.handle_ls(&args) {
-                    println!("Error: {e}");
+                    println!("{RED}Error: {e}{RESET}");
                 }
             }
             "cd" => {
@@ -782,7 +808,7 @@ impl Repl {
 
         match self.client.call(query) {
             Ok(_) => self.current_object = next_obj,
-            Err(e) => println!("Error: {e}"),
+            Err(e) => println!("{RED}Error: {e}{RESET}"),
         }
     }
 
@@ -796,7 +822,7 @@ impl Repl {
 
         match self.client.call(query) {
             Ok(result) => println!("{result}"),
-            Err(e) => println!("Error: {e}"),
+            Err(e) => println!("{RED}Error: {e}{RESET}"),
         }
     }
 
@@ -886,7 +912,7 @@ impl Repl {
             } else {
                 "/".to_string()
             };
-            println!("Error: Object '{path_display}' not found.");
+            println!("{RED}Error: Object '{path_display}' not found.{RESET}");
             return Ok(());
         };
 
@@ -1334,10 +1360,23 @@ mod tests {
             )
             .is_none());
 
-        // Highlighter
+        // Highlighter — no " > " separator so prompt falls back unchanged
         assert_eq!(h.highlight_prompt("prompt", true), Cow::Borrowed("prompt"));
-        assert_eq!(h.highlight_hint("hint"), Cow::Borrowed("hint"));
-        assert_eq!(h.highlight("line", 0), Cow::Borrowed("line"));
+        // hint is wrapped in dim ANSI codes
+        assert_eq!(
+            h.highlight_hint("hint"),
+            Cow::<str>::Owned(format!("{DIM}hint{RESET}"))
+        );
+        // non-builtin word is wrapped in cyan
+        assert_eq!(
+            h.highlight("line", 0),
+            Cow::<str>::Owned(format!("{CYAN}line{RESET}"))
+        );
+        // builtin is wrapped in yellow
+        assert_eq!(
+            h.highlight("cd group", 0),
+            Cow::<str>::Owned(format!("{YELLOW}cd{RESET} group"))
+        );
         assert!(h.highlight_char("line", 0, rustyline::highlight::CmdKind::Other));
     }
 
