@@ -21,14 +21,9 @@ env:
   SCCACHE_DIR: "/opt/hostedtoolcache/sccache"
   SCCACHE_CACHE_SIZE: "15G"
 
-  # Tool paths
-  UV_INSTALL_DIR: "/opt/hostedtoolcache/uv"
+  # Tool paths (uv is pre-installed in the runner image at /usr/local/bin)
+  UV_INSTALL_DIR: "/usr/local/bin"
   UV_CACHE_DIR: "/opt/hostedtoolcache/uv-cache"
-  UV_PYTHON_INSTALL_DIR: "/opt/hostedtoolcache/uv-python"
-  WAYLAND_INSTALL_DIR: "/opt/hostedtoolcache/qtile-deps/wayland/install"
-  PKG_CONFIG_PATH: "/opt/hostedtoolcache/qtile-deps/wayland/install/lib/pkgconfig:/opt/hostedtoolcache/qtile-deps/wayland/install/share/pkgconfig"
-  LD_LIBRARY_PATH: "/opt/hostedtoolcache/qtile-deps/wayland/install/lib"
-  DEBIAN_FRONTEND: "noninteractive"
   QTILE_REPO: "https://github.com/qtile/qtile.git"
   QTILE_BRANCH: "master"
 
@@ -54,9 +49,6 @@ jobs:
           rustup component add llvm-tools
           cargo binstall -y sccache cargo-llvm-cov
 
-      - name: Install System Deps
-        run: ./.github/scripts/install-deps $(cat ./deps)
-
   pre-commit:
     name: Pre-commit
     needs: prepare
@@ -68,7 +60,7 @@ jobs:
         run: |
           echo "${{ env.CARGO_HOME }}/bin" >> $GITHUB_PATH
           echo "${{ env.RUSTUP_HOME }}/bin" >> $GITHUB_PATH
-          echo "${{ env.UV_INSTALL_DIR }}/bin" >> $GITHUB_PATH
+          echo "${{ env.UV_INSTALL_DIR }}" >> $GITHUB_PATH
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Run pre-commit
@@ -126,8 +118,7 @@ jobs:
 
       - name: update GITHUB_PATH
         run: |
-          echo "${{ env.WAYLAND_INSTALL_DIR }}/bin" >> $GITHUB_PATH
-          echo "${{ env.UV_INSTALL_DIR }}/bin" >> $GITHUB_PATH
+          echo "${{ env.UV_INSTALL_DIR }}" >> $GITHUB_PATH
           echo "${{ env.CARGO_HOME }}/bin" >> $GITHUB_PATH
           echo "${{ env.RUSTUP_HOME }}/bin" >> $GITHUB_PATH
           echo "$HOME/.local/bin" >> $GITHUB_PATH
@@ -135,15 +126,9 @@ jobs:
       - name: Start sccache
         run: sccache --start-server
 
-      - name: Install System Deps
-        run: ./.github/scripts/install-deps $(cat ./deps)
-
       - name: Setup Python Dev Environment
         run: |
-          uv python install ${{ matrix.python-version }}
           PYTHON_BIN=$(uv python find ${{ matrix.python-version }})
-          PY_DIR=$(dirname $(dirname "$PYTHON_BIN"))
-          echo "PKG_CONFIG_PATH=$PY_DIR/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
           PY_INCLUDE=$($PYTHON_BIN -c "import sysconfig; print(sysconfig.get_path('include'))")
           echo "CFLAGS=-I$PY_INCLUDE" >> $GITHUB_ENV
 
@@ -158,7 +143,7 @@ jobs:
       - name: Run Tests
         run: ./.github/scripts/run-tests ${{ matrix.python-version }}
         env:
-          XWAYLAND: ${{ env.WAYLAND_INSTALL_DIR }}/bin/Xwayland
+          XWAYLAND: /usr/bin/Xwayland
 
       - name: Finalize sccache
         if: always() # Ensures it stops even if tests fail
@@ -181,21 +166,14 @@ jobs:
 
       - name: update GITHUB_PATH
         run: |
-          echo "${{ env.WAYLAND_INSTALL_DIR }}/bin" >> $GITHUB_PATH
-          echo "${{ env.UV_INSTALL_DIR }}/bin" >> $GITHUB_PATH
+          echo "${{ env.UV_INSTALL_DIR }}" >> $GITHUB_PATH
           echo "${{ env.CARGO_HOME }}/bin" >> $GITHUB_PATH
           echo "${{ env.RUSTUP_HOME }}/bin" >> $GITHUB_PATH
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Install System Deps
-        run: ./.github/scripts/install-deps $(cat ./deps)
-
       - name: Setup Python Dev Environment
         run: |
-          uv python install 3.12
           PYTHON_BIN=$(uv python find 3.12)
-          PY_DIR=$(dirname $(dirname "$PYTHON_BIN"))
-          echo "PKG_CONFIG_PATH=$PY_DIR/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
           PY_INCLUDE=$($PYTHON_BIN -c "import sysconfig; print(sysconfig.get_path('include'))")
           echo "CFLAGS=-I$PY_INCLUDE" >> $GITHUB_ENV
 
