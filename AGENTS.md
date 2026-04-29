@@ -1,6 +1,10 @@
-# CLAUDE.md
+# qtile-cmd-client (qticc)
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+`qticc` is a high-performance Rust CLI client for the Qtile window manager. It communicates with Qtile over Unix domain sockets and is significantly faster than the official Python `qtile cmd-obj` tool (sub-100ms vs several seconds).
+
+**Key features:** length-prefixed framing protocol (4-byte BE, Qtile PR #5835), interactive REPL with tab-completion, JSON output for scripting, full command graph navigation.
+
+**Tech stack:** Rust 2021, `anyhow` (errors), `clap` (CLI), `serde`/`serde_json`, `rustyline` (REPL), `simple_logger`.
 
 ## Commands
 
@@ -56,12 +60,10 @@ Socket path: `$XDG_CACHE_HOME/qtile/qtilesocket.<display>` (defaults to `~/.cach
 
 ### CI
 
-Self-hosted GitHub Actions runner (`qtile`) on Debian Trixie/Sid. Matrix: Python 3.12 / 3.13 / 3.14 × Rust stable / nightly. Python 3.14 and nightly are `continue-on-error`.
+Self-hosted GitHub Actions runner (`qtile`) on Fedora 44. Matrix: Python 3.12 / 3.13 / 3.14 × Rust stable / nightly. Python 3.14 and nightly are `continue-on-error`.
 
-**Shared PVC** at `/opt/hostedtoolcache` caches `RUSTUP_HOME`, `CARGO_HOME`, `UV_CACHE_DIR`, and pre-built Wayland deps (`/opt/hostedtoolcache/qtile-deps/wayland/install`). Key CI details:
+**Shared PVC** at `/opt/hostedtoolcache` caches `RUSTUP_HOME`, `CARGO_HOME`, and `UV_CACHE_DIR`. Wayland dependencies (wlroots, Xwayland, etc.) are baked into the runner image — no runtime installation needed.
 
-- **Locking**: `.github/scripts/install-deps` uses a global lock with exponential backoff and stale-lock detection (30 min threshold) to prevent parallel jobs from corrupting shared PVC state.
-- **Dynamic patching**: `.github/scripts/patch_wayland_setup.py` wraps build blocks in the upstream Qtile setup script and uses `pkg-config` to skip rebuilding Wayland dependencies (wlroots, etc.) already present in the PVC.
 - **UV**: Python and Qtile are managed via `uv`; GitHub remote caching is disabled (`enable-cache: false`) to avoid `tar` conflicts on the shared volume.
 - Qtile is installed from mainline `master` (`qtile/qtile`).
 
