@@ -27,6 +27,9 @@ env:
   QTILE_REPO: "https://github.com/qtile/qtile.git"
   QTILE_BRANCH: "master"
 
+  # Node.js 20 is deprecated. Force Node.js 24 for all JavaScript actions.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   prepare:
     name: Prepare toolcache
@@ -35,7 +38,7 @@ jobs:
       group: pvc-toolcache-lock
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: update GITHUB_PATH
         run: |
@@ -54,7 +57,7 @@ jobs:
     needs: prepare
     runs-on: qtile
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: update GITHUB_PATH
         run: |
@@ -77,7 +80,7 @@ jobs:
       matrix:
         rust: [stable, nightly]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: update GITHUB_PATH
         run: |
@@ -114,7 +117,7 @@ jobs:
         python-version: ["3.12", "3.13", "3.14"]
         rust: [stable, nightly]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: update GITHUB_PATH
         run: |
@@ -159,7 +162,7 @@ jobs:
     env:
       RUSTC_WRAPPER: "sccache"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Network Pre-flight
         run: until timeout 1 bash -c "cat < /dev/null > /dev/tcp/github.com/443"; do sleep 5; done
@@ -189,7 +192,7 @@ jobs:
         run: ./.github/scripts/run-coverage
 
       - name: Upload to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: target/llvm-cov/lcov.info

@@ -4,6 +4,10 @@ on:
     - cron: '0 0 * * 0' # Runs every Sunday at midnight
   workflow_dispatch: # Allows you to run it manually
 
+env:
+  # Node.js 20 is deprecated. Force Node.js 24 for all JavaScript actions.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   cleanup:
     runs-on: qtile

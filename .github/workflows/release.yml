@@ -5,12 +5,16 @@ on:
     tags:
       - 'v*'
 
+env:
+  # Node.js 20 is deprecated. Force Node.js 24 for all JavaScript actions.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     name: Build Release Binary
     runs-on: qtile
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -22,7 +26,7 @@ jobs:
         run: cargo build --release
 
       - name: Create GitHub Release and Upload Asset
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: target/release/qticc
           generate_release_notes: true
