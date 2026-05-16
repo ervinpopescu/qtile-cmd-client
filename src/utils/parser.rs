@@ -82,6 +82,7 @@ impl CommandParser {
         kwargs: Option<HashMap<String, Value>>,
         lifted: Option<bool>,
         info: bool,
+        framed: bool,
     ) -> anyhow::Result<CommandAction> {
         let command: String;
         let mut args_to_be_sent: Vec<Value> = vec![];
@@ -101,7 +102,13 @@ impl CommandParser {
                     let info_text = format!(
                         "{} {}",
                         s,
-                        Self::get_formatted_info(selectors.clone(), &info_cmd, true, false,)?
+                        Self::get_formatted_info(
+                            selectors.clone(),
+                            &info_cmd,
+                            true,
+                            false,
+                            framed
+                        )?
                     );
                     return Ok(CommandAction::Help(info_text));
                 } else {
@@ -109,7 +116,7 @@ impl CommandParser {
                 }
             }
             None => {
-                let help = Self::get_help(&selectors, None)?;
+                let help = Self::get_help(&selectors, None, framed)?;
                 return Ok(CommandAction::Help(help));
             }
         }
@@ -131,6 +138,7 @@ impl CommandParser {
     pub fn get_help(
         selectors: &[Vec<Value>],
         object_names: Option<Vec<String>>,
+        framed: bool,
     ) -> anyhow::Result<String> {
         let commands = CommandParser {
             selectors: selectors.to_owned(),
@@ -140,8 +148,8 @@ impl CommandParser {
             lifted: true,
         };
         let data = commands.to_payload()?;
-        let response = Client::send_request(data);
-        let result = Client::match_response(response);
+        let response = Client::send_request(data, framed);
+        let result = Client::match_response(response, framed);
 
         match result {
             Ok(Value::Array(arr)) => {
@@ -149,7 +157,7 @@ impl CommandParser {
                     .map(|v| v.join(" "))
                     .unwrap_or_else(|| "root".to_owned());
                 let prefix = format!("-o {obj_string} -f ");
-                Self::get_commands_help(selectors.to_owned(), prefix, arr)
+                Self::get_commands_help(selectors.to_owned(), prefix, arr, framed)
             }
             Ok(_) => bail!("'commands' result should be an array"),
             Err(err) => bail!("qtile error: {err}"),
@@ -192,6 +200,7 @@ impl CommandParser {
         selectors: Vec<Vec<Value>>,
         prefix: String,
         arr: Vec<Value>,
+        framed: bool,
     ) -> anyhow::Result<String> {
         let commands = arr
             .iter()
@@ -224,7 +233,7 @@ impl CommandParser {
         };
 
         let data = eval_parser.to_payload()?;
-        let result = Client::match_response(Client::send_request(data))?;
+        let result = Client::match_response(Client::send_request(data, framed), framed)?;
 
         let docs_str = result.as_str().context("eval result should be a string")?;
         let docs: Vec<&str> = docs_str.split(sep).collect();
@@ -260,6 +269,7 @@ impl CommandParser {
         cmd: &str,
         args: bool,
         short: bool,
+        framed: bool,
     ) -> anyhow::Result<String> {
         let commands = CommandParser {
             selectors: selectors.clone(),
@@ -269,8 +279,8 @@ impl CommandParser {
             lifted: true,
         };
         let data = commands.to_payload()?;
-        let response = Client::send_request(data);
-        match Client::match_response(response) {
+        let response = Client::send_request(data, framed);
+        match Client::match_response(response, framed) {
             Ok(res) => {
                 let doc = res.as_str().context("doc result not a string")?;
                 Self::parse_docstring(doc, args, short)
@@ -564,6 +574,26 @@ mod tests {
             string_arg_to_value("/path/to/file"),
             Value::String("/path/to/file".into())
         );
+        // Float values that can't be parsed as i64 fall through to f64.
+        assert_eq!(
+            string_arg_to_value("1.5"),
+            Value::Number(Number::from_f64(1.5).unwrap())
+        );
+        // NaN and Infinity are not valid JSON numbers; they fall back to string.
+        assert_eq!(string_arg_to_value("nan"), Value::String("nan".into()));
+    }
+
+    #[test]
+    fn test_get_object_string_selector_skipped_when_next_is_object_name() {
+        // "screen" doesn't accept string selectors. When the following token is a
+        // known object name ("group"), it is treated as the next object, not a
+        // selector, so screen receives Value::Null.
+        let selectors = CommandParser::get_object(vec!["screen".into(), "group".into()]).unwrap();
+        assert_eq!(selectors.len(), 2);
+        assert_eq!(selectors[0][0], Value::String("screen".into()));
+        assert_eq!(selectors[0][1], Value::Null);
+        assert_eq!(selectors[1][0], Value::String("group".into()));
+        assert_eq!(selectors[1][1], Value::Null);
     }
 
     #[test]
@@ -608,6 +638,7 @@ mod tests {
             None,
             None,
             false,
+            true,
         )
         .unwrap();
         if let CommandAction::Execute(p) = action {
@@ -619,17 +650,18 @@ mod tests {
 
         // Help action (no function provided)
         let action_no_func =
-            CommandParser::from_params(None, None, None, None, None, false).unwrap();
+            CommandParser::from_params(None, None, None, None, None, false, false).unwrap();
         assert!(matches!(action_no_func, CommandAction::Help(_)));
 
         // A function literally named "help" must be dispatched as Execute, not intercepted
         let action_help =
-            CommandParser::from_params(None, Some("help".into()), None, None, None, false).unwrap();
+            CommandParser::from_params(None, Some("help".into()), None, None, None, false, false)
+                .unwrap();
         assert!(matches!(action_help, CommandAction::Execute(_)));
 
         // Info action
         let action_info =
-            CommandParser::from_params(None, Some("status".into()), None, None, None, true)
+            CommandParser::from_params(None, Some("status".into()), None, None, None, true, false)
                 .unwrap();
         assert!(matches!(action_info, CommandAction::Help(_)));
     }
@@ -638,7 +670,7 @@ mod tests {
     #[ignore = "requires live Qtile socket"]
     fn test_command_parser_get_help() {
         // In the coverage env, qtile is running, so this should succeed.
-        let res = CommandParser::get_help(&[], None);
+        let res = CommandParser::get_help(&[], None, true);
         assert!(res.is_ok());
     }
 }
