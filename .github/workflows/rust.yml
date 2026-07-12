@@ -46,7 +46,17 @@ jobs:
           echo "${{ env.RUSTUP_HOME }}/bin" >> $GITHUB_PATH
 
       - name: Setup Rust & tools
+        # RUSTUP_HOME/CARGO_HOME live on a ReadWriteMany PVC shared by every
+        # runner pod. Concurrent PRs each running `prepare` at the same time
+        # race on the same toolchain download dir (e.g. on a stable/nightly
+        # channel bump, which redownloads all components) and fail with
+        # "could not rename ... .partial file: No such file or directory".
+        # flock serializes this section across pods so they queue instead of
+        # racing; the per-PR `concurrency:` group above doesn't help since it
+        # only serializes runs for the *same* PR/branch.
         run: |
+          exec 200>/opt/hostedtoolcache/.rustup-toolchain.lock
+          flock -w 300 200
           rustup toolchain install stable nightly --profile minimal --no-self-update
           rustup default stable
           rustup component add llvm-tools
