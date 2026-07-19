@@ -74,7 +74,9 @@ jobs:
           fi
 
           rustup default stable
-          rustup component add llvm-tools
+          rustup component add rustfmt clippy --toolchain stable
+          rustup component add rustfmt clippy --toolchain nightly
+          rustup component add llvm-tools --toolchain stable
           cargo binstall -y sccache cargo-llvm-cov
 
   pre-commit:
