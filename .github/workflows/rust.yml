@@ -57,7 +57,22 @@ jobs:
         run: |
           exec 200>/opt/hostedtoolcache/.rustup-toolchain.lock
           flock -w 300 200
-          rustup toolchain install stable nightly --profile minimal --no-self-update
+
+          # Clean up any residual doc or zsh completion directories that cause NFS rename failures
+          # and remove rust-docs which is extremely slow to extract and unused in CI.
+          rustup component remove rust-docs --toolchain stable || true
+          rustup component remove rust-docs --toolchain nightly || true
+          rm -rf /opt/hostedtoolcache/rustup/toolchains/*/share/doc
+          rm -rf /opt/hostedtoolcache/rustup/toolchains/*/share/zsh
+          rm -rf /opt/hostedtoolcache/rustup/tmp/*
+
+          if ! rustup toolchain install stable nightly --profile minimal --no-self-update; then
+            echo "Toolchain install failed. Cleaning up and retrying with a fresh slate..."
+            rm -rf /opt/hostedtoolcache/rustup/toolchains/*
+            rm -rf /opt/hostedtoolcache/rustup/tmp/*
+            rustup toolchain install stable nightly --profile minimal --no-self-update
+          fi
+
           rustup default stable
           rustup component add llvm-tools
           cargo binstall -y sccache cargo-llvm-cov
