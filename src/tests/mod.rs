@@ -5,7 +5,7 @@ use crate::utils::client::{CallResult, CommandQuery, QtileClient};
 #[test]
 #[ignore = "requires live Qtile socket"]
 fn qtile_info() -> anyhow::Result<()> {
-    let client = QtileClient::new();
+    let client = QtileClient::new(true);
     let query = CommandQuery::new()
         .object(vec!["root".to_string()])
         .function("qtile_info".to_string())
@@ -27,7 +27,7 @@ fn qtile_info() -> anyhow::Result<()> {
 #[test]
 #[ignore = "requires live Qtile socket"]
 fn list_commands() -> anyhow::Result<()> {
-    let client = QtileClient::new();
+    let client = QtileClient::new(true);
     let query = CommandQuery::new().function("commands".to_string());
     let ret = client.call(query);
     match ret {
@@ -44,7 +44,7 @@ fn list_commands() -> anyhow::Result<()> {
 
 #[test]
 fn test_invalid_object() {
-    let client = QtileClient::new();
+    let client = QtileClient::new(true);
     let query = CommandQuery::new()
         .object(vec!["nonexistent_object".to_string()])
         .function("status".to_string());
@@ -54,8 +54,11 @@ fn test_invalid_object() {
 
 #[test]
 fn test_invalid_function() {
-    let client = QtileClient::new();
+    let client = QtileClient::new(true);
     let query = CommandQuery::new().function("nonexistent_function".to_string());
     let ret = client.call(query);
     assert!(ret.is_err());
 }
+
+#[cfg(feature = "framing")]
+mod framing;
