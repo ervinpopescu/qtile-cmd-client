@@ -106,17 +106,38 @@ impl CommandQuery {
 }
 
 /// Client for executing commands against a running Qtile instance.
-#[derive(Default)]
-pub struct QtileClient;
+pub struct QtileClient {
+    #[cfg(feature = "framing")]
+    pub(crate) framed: bool,
+}
+
+impl Default for QtileClient {
+    fn default() -> Self {
+        Self::new(false)
+    }
+}
 
 impl QtileClient {
-    /// Creates a new client.
-    pub fn new() -> Self {
-        Self
+    /// Creates a new client with the specified framing protocol setting.
+    pub fn new(_framed: bool) -> Self {
+        Self {
+            #[cfg(feature = "framing")]
+            framed: _framed,
+        }
+    }
+
+    /// Returns the framing protocol setting for this client.
+    #[cfg(feature = "framing")]
+    pub fn framed(&self) -> bool {
+        self.framed
     }
 
     /// Executes a command or fetches help text based on the provided [`CommandQuery`].
     pub fn call(&self, query: CommandQuery) -> anyhow::Result<CallResult> {
+        #[cfg(feature = "framing")]
+        let framed = self.framed;
+        #[cfg(not(feature = "framing"))]
+        let framed = false;
         let action = CommandParser::from_params(
             query.object,
             query.function,
@@ -124,12 +145,13 @@ impl QtileClient {
             query.kwargs,
             query.lifted,
             query.info,
+            framed,
         )?;
         match action {
             CommandAction::Execute(c) => {
                 let data = c.to_payload()?;
-                let response = Client::send_request(data);
-                Client::match_response(response).map(CallResult::Value)
+                let response = Client::send_request(data, framed);
+                Client::match_response(response, framed).map(CallResult::Value)
             }
             CommandAction::Help(text) => Ok(CallResult::Text(text)),
         }
@@ -209,5 +231,51 @@ mod tests {
 
         let text_res = CallResult::Text("plain text".to_string());
         assert_eq!(format!("{}", text_res), "plain text");
+    }
+
+    #[test]
+    fn test_qtile_client_default() {
+        let _client = QtileClient::default();
+        #[cfg(feature = "framing")]
+        assert!(!_client.framed());
+    }
+
+    #[cfg(feature = "framing")]
+    #[test]
+    fn test_qtile_client_framed_getter() {
+        let client = QtileClient::new(true);
+        assert!(client.framed());
+        let client_unframed = QtileClient::new(false);
+        assert!(!client_unframed.framed());
+    }
+
+    #[test]
+    fn test_call_root_helpers_fail_without_socket() {
+        let prev_xdg = std::env::var("XDG_CACHE_HOME").ok();
+        let prev_wayland = std::env::var("WAYLAND_DISPLAY").ok();
+        let prev_display = std::env::var("DISPLAY").ok();
+        std::env::set_var("XDG_CACHE_HOME", "/tmp/qtile-no-such-cache-dir-test");
+        std::env::set_var("WAYLAND_DISPLAY", "no-such-display-99");
+        std::env::remove_var("DISPLAY");
+
+        let client = QtileClient::new(false);
+        let r1 = client.call_root("status");
+        let r2 = client.call_root_with_args("status", vec!["arg".to_string()]);
+
+        match prev_xdg {
+            Some(v) => std::env::set_var("XDG_CACHE_HOME", v),
+            None => std::env::remove_var("XDG_CACHE_HOME"),
+        }
+        match prev_wayland {
+            Some(v) => std::env::set_var("WAYLAND_DISPLAY", v),
+            None => std::env::remove_var("WAYLAND_DISPLAY"),
+        }
+        match prev_display {
+            Some(v) => std::env::set_var("DISPLAY", v),
+            None => std::env::remove_var("DISPLAY"),
+        }
+
+        assert!(r1.is_err());
+        assert!(r2.is_err());
     }
 }
