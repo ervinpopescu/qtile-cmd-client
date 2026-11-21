@@ -1028,10 +1028,10 @@ mod tests {
         let repl = Repl::new();
         let items = repl.ls_items(&["root".to_string()]).unwrap();
         // Root can access all node types including core.
-        assert!(items.contains(&"bar".to_string()));
-        assert!(items.contains(&"group".to_string()));
-        assert!(items.contains(&"screen".to_string()));
-        assert!(items.contains(&"window".to_string()));
+        assert!(items.iter().any(|item| item == "bar"));
+        assert!(items.iter().any(|item| item == "group"));
+        assert!(items.iter().any(|item| item == "screen"));
+        assert!(items.iter().any(|item| item == "window"));
     }
 
     #[test]
@@ -1045,10 +1045,10 @@ mod tests {
         let path = vec!["root".to_string(), "group".to_string(), group_name.clone()];
         let items = repl.ls_items(&path).unwrap();
         // group children: layout, screen, window
-        assert!(items.contains(&"layout".to_string()));
-        assert!(items.contains(&"screen".to_string()));
-        assert!(items.contains(&"window".to_string()));
-        assert!(!items.contains(&"bar".to_string()));
+        assert!(items.iter().any(|item| item == "layout"));
+        assert!(items.iter().any(|item| item == "screen"));
+        assert!(items.iter().any(|item| item == "window"));
+        assert!(!items.iter().any(|item| item == "bar"));
         assert!(!items.is_empty());
     }
 
