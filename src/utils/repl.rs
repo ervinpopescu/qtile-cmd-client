@@ -642,16 +642,16 @@ pub struct Repl {
 
 impl Default for Repl {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
 impl Repl {
-    pub fn new() -> Self {
+    pub fn new(_framed: bool) -> Self {
         let cfg = ReplConfig::load();
         let completion_mode = cfg.completion_mode();
         Self {
-            client: QtileClient::new(),
+            client: QtileClient::new(_framed),
             current_object: vec!["root".to_string()],
             completion_mode,
             cfg,
@@ -692,8 +692,12 @@ impl Repl {
         println!("Use 'cd <object>' to move through the command graph.");
 
         // Build the helper once and reuse it across iterations; only current_object changes.
+        #[cfg(feature = "framing")]
+        let helper_framed = self.client.framed();
+        #[cfg(not(feature = "framing"))]
+        let helper_framed = false;
         rl.set_helper(Some(QtileHelper {
-            client: QtileClient::new(),
+            client: QtileClient::new(helper_framed),
             current_object: self.current_object.clone(),
             completion_mode: self.completion_mode,
             hints: self.cfg.editor.hints,
@@ -943,7 +947,7 @@ mod tests {
 
     fn helper() -> QtileHelper {
         QtileHelper {
-            client: QtileClient::new(),
+            client: QtileClient::new(false),
             current_object: vec!["root".to_string()],
             completion_mode: CompletionMode::default(),
             hints: true,
@@ -965,7 +969,7 @@ mod tests {
     #[test]
     fn test_get_active_path_navigation() {
         let h = QtileHelper {
-            client: QtileClient::new(),
+            client: QtileClient::new(false),
             current_object: vec!["root".to_string(), "group".to_string(), "1".to_string()],
             completion_mode: CompletionMode::default(),
             hints: true,
@@ -981,14 +985,20 @@ mod tests {
 
     #[test]
     fn test_repl_init() {
-        let repl = Repl::new();
+        let repl = Repl::new(true);
+        #[cfg(feature = "framing")]
+        assert!(repl.client.framed());
         assert_eq!(repl.current_object, vec!["root"]);
-        let _default_repl = Repl::default();
+
+        let default_repl = Repl::default();
+        #[cfg(feature = "framing")]
+        assert!(!default_repl.client.framed());
+        let _ = default_repl;
     }
 
     #[test]
     fn test_handle_line() {
-        let mut repl = Repl::new();
+        let mut repl = Repl::new(false);
         assert!(repl.handle_line("exit"));
         assert!(repl.handle_line("quit"));
         assert!(!repl.handle_line("ls"));
@@ -1025,7 +1035,7 @@ mod tests {
 
     #[test]
     fn test_ls_items_at_root_returns_all_classes() {
-        let repl = Repl::new();
+        let repl = Repl::new(false);
         let items = repl.ls_items(&["root".to_string()]).unwrap();
         // Root can access all node types including core.
         assert!(items.contains(&"bar".to_string()));
@@ -1037,7 +1047,7 @@ mod tests {
     #[test]
     #[ignore = "requires live Qtile socket"]
     fn test_ls_items_at_instance_returns_classes() {
-        let repl = Repl::new();
+        let repl = Repl::new(false);
         let groups = repl
             .ls_items(&["root".to_string(), "group".to_string()])
             .expect("should be able to list groups from live Qtile");
@@ -1054,7 +1064,7 @@ mod tests {
 
     #[test]
     fn test_ls_items_sorted_and_deduped() {
-        let repl = Repl::new();
+        let repl = Repl::new(false);
         let items = repl.ls_items(&["root".to_string()]).unwrap();
         let mut sorted = items.clone();
         sorted.sort();
@@ -1065,7 +1075,7 @@ mod tests {
     #[test]
     #[ignore = "requires live Qtile socket"]
     fn test_ls_items_item_class_returns_instances() {
-        let repl = Repl::new();
+        let repl = Repl::new(false);
         let items = repl
             .ls_items(&["root".to_string(), "screen".to_string()])
             .unwrap();
@@ -1081,7 +1091,7 @@ mod tests {
     #[test]
     #[ignore = "requires live Qtile socket"]
     fn test_ls_items_group_returns_group_names() {
-        let repl = Repl::new();
+        let repl = Repl::new(false);
         let items = repl
             .ls_items(&["root".to_string(), "group".to_string()])
             .unwrap();
@@ -1091,7 +1101,7 @@ mod tests {
     #[test]
     #[ignore = "requires live Qtile socket"]
     fn test_ls_items_nonexistent_selector_returns_none() {
-        let repl = Repl::new();
+        let repl = Repl::new(false);
         // "o" is not a valid screen index — ls_items must return None, not static children.
         let path: Vec<String> = ["root", "screen", "o"]
             .iter()
@@ -1225,7 +1235,7 @@ mod tests {
 
     #[test]
     fn test_handle_cd_dot_noop() {
-        let mut repl = Repl::new();
+        let mut repl = Repl::new(false);
         repl.current_object = vec!["root".into(), "group".into()];
         repl.handle_cd(&["."]);
         // Should stay at ["root", "group"] — cd . is a no-op regardless of IPC result.
@@ -1236,14 +1246,14 @@ mod tests {
 
     #[test]
     fn test_handle_cd_empty_args() {
-        let mut repl = Repl::new();
+        let mut repl = Repl::new(false);
         repl.handle_cd(&[]);
         assert_eq!(repl.current_object, vec!["root"]);
     }
 
     #[test]
     fn test_handle_cd_empty_navigates_to_root() {
-        let mut repl = Repl::new();
+        let mut repl = Repl::new(false);
         repl.current_object = vec!["root".into(), "screen".into(), "0".into()];
         repl.handle_cd(&[]);
         assert_eq!(repl.current_object, vec!["root"]);
@@ -1251,7 +1261,7 @@ mod tests {
 
     #[test]
     fn test_handle_line_dotdot() {
-        let mut repl = Repl::new();
+        let mut repl = Repl::new(false);
         repl.current_object = vec!["root".into(), "group".into()];
         assert!(!repl.handle_line(".."));
         assert_eq!(repl.current_object, vec!["root"]);
@@ -1261,7 +1271,7 @@ mod tests {
 
     #[test]
     fn test_handle_cd_complex() {
-        let mut repl = Repl::new();
+        let mut repl = Repl::new(false);
         repl.handle_cd(&["group"]);
         repl.handle_cd(&["/"]);
         assert_eq!(repl.current_object, vec!["root"]);
@@ -1274,7 +1284,7 @@ mod tests {
 
     #[test]
     fn test_handle_cd_class_node_no_socket() {
-        let mut repl = Repl::new();
+        let mut repl = Repl::new(false);
         // cd to a class node must succeed without an IPC socket
         repl.handle_cd(&["group"]);
         assert_eq!(repl.current_object, vec!["root", "group"]);
@@ -1288,7 +1298,7 @@ mod tests {
 
     #[test]
     fn test_handle_ls_complex() {
-        let repl = Repl::new();
+        let repl = Repl::new(false);
         assert!(repl.handle_ls(&[]).is_ok());
         assert!(repl.handle_ls(&["group"]).is_ok());
         assert!(repl.handle_ls(&[".."]).is_ok());
@@ -1298,7 +1308,7 @@ mod tests {
 
     #[test]
     fn test_handle_line_navigation() {
-        let mut repl = Repl::new();
+        let mut repl = Repl::new(false);
         repl.handle_line("cd group");
         repl.handle_line("..");
         assert_eq!(repl.current_object, vec!["root"]);
@@ -1308,7 +1318,7 @@ mod tests {
 
     #[test]
     fn test_handle_call() {
-        let repl = Repl::new();
+        let repl = Repl::new(false);
         repl.handle_call("status", &[]);
     }
 
@@ -1405,7 +1415,7 @@ mod tests {
     #[test]
     fn test_eval_joins_args() {
         // Quoted: shell_split strips quotes; eval arm joins the single token
-        let mut repl = Repl::new();
+        let mut repl = Repl::new(false);
         // Exercise handle_line with eval — just confirm it doesn't panic and that
         // the join produces the right string (IPC will fail without Qtile, that's fine).
         assert!(!repl.handle_line("eval self.info()"));

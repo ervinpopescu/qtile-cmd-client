@@ -73,6 +73,11 @@ pub struct Client {
 }
 
 impl Client {
+    #[cfg(feature = "framing")]
+    pub fn new_from_stream(stream: UnixStream, _framed: bool) -> Self {
+        Self { stream }
+    }
+
     pub fn connect() -> anyhow::Result<Self> {
         Self::connect_with_path(None)
     }
@@ -93,8 +98,55 @@ impl Client {
     }
 
     /// Send a message and get a response using a one-off connection.
-    pub fn send_request(data: String) -> anyhow::Result<String> {
+    /// When `framed` is true, uses the JSON IPC length-prefixed framing protocol.
+    /// Falls back to legacy unframed mode otherwise, with auto-retry on empty response.
+    pub fn send_request(data: String, framed: bool) -> anyhow::Result<String> {
+        let res = Self::try_send_request(data.clone(), framed);
+        // If unframed returned empty, retry with framing (server may have dropped legacy support).
+        if !framed {
+            if let Ok(ref s) = res {
+                if s.is_empty() {
+                    return Self::try_send_request(data, true);
+                }
+            }
+            return res;
+        }
+        // If framing failed at the transport level (I/O error), the server likely uses the
+        // legacy protocol (no framing support). Retry without framing.
+        if let Err(ref e) = res {
+            let is_io = e
+                .chain()
+                .any(|cause| cause.downcast_ref::<io::Error>().is_some());
+            if is_io {
+                return Self::try_send_request(data, false);
+            }
+        }
+        res
+    }
+
+    fn try_send_request(data: String, framed: bool) -> anyhow::Result<String> {
         let mut client = Self::connect()?;
+        if framed {
+            #[cfg(feature = "framing")]
+            {
+                let payload = serde_json::json!({
+                    "message_type": "command",
+                    "content": serde_json::from_str::<serde_json::Value>(&data)
+                        .unwrap_or(serde_json::Value::String(data.clone()))
+                });
+                let framed_data = serde_json::to_string(&payload)?;
+                client.write_frame(framed_data.as_bytes())?;
+                // Shutdown write so legacy servers that read-until-EOF don't
+                // deadlock waiting for more data while we wait for a reply.
+                let _ = client.stream.shutdown(std::net::Shutdown::Write);
+                let bytes = client.read_frame()?;
+                return String::from_utf8(bytes).context("frame payload is not valid UTF-8");
+            }
+            #[cfg(not(feature = "framing"))]
+            {
+                let _ = framed; // suppress unused warning
+            }
+        }
         client.stream.write_all(data.as_bytes())?;
 
         // Issue 2: ENOTCONN / BrokenPipe from shutdown means the server already closed
@@ -142,14 +194,45 @@ impl Client {
         String::from_utf8(raw).context("ipc: response is not valid UTF-8")
     }
 
+    /// Write a length-prefixed frame (4-byte big-endian length + payload).
+    #[cfg(feature = "framing")]
+    pub fn write_frame(&mut self, data: &[u8]) -> anyhow::Result<()> {
+        let len = data.len() as u32;
+        self.stream
+            .write_all(&len.to_be_bytes())
+            .context("Failed to write frame header")?;
+        self.stream
+            .write_all(data)
+            .context("Failed to write frame body")?;
+        Ok(())
+    }
+
+    /// Read a length-prefixed frame (4-byte big-endian length + payload).
+    #[cfg(feature = "framing")]
+    pub fn read_frame(&mut self) -> anyhow::Result<Vec<u8>> {
+        let mut len_buf = [0u8; 4];
+        self.stream
+            .read_exact(&mut len_buf)
+            .context("Failed to read frame header")?;
+        let len = u32::from_be_bytes(len_buf) as usize;
+        let mut buf = vec![0u8; len];
+        self.stream
+            .read_exact(&mut buf)
+            .context("Failed to read frame body")?;
+        Ok(buf)
+    }
+
     /// Legacy wrapper for backward compatibility.
     #[allow(dead_code)]
     pub fn send(data: String) -> anyhow::Result<String> {
-        Self::send_request(data)
+        Self::send_request(data, false)
     }
 
     /// Validates and parses the Qtile IPC response.
-    pub fn match_response(response: anyhow::Result<String>) -> anyhow::Result<Value> {
+    pub fn match_response(
+        response: anyhow::Result<String>,
+        _framed: bool,
+    ) -> anyhow::Result<Value> {
         let response = response?;
         let mut s: Value = serde_json::from_str(&response).context("ipc.Client: invalid JSON")?;
 
@@ -320,7 +403,7 @@ mod tests {
             }
         });
         let response = serde_json::to_string(&payload).unwrap();
-        let result = Client::match_response(Ok(response))
+        let result = Client::match_response(Ok(response), false)
             .expect("Should parse new JSON IPC reply with 'result'");
         assert_eq!(result, json!({"version": "0.1.dev"}));
     }
@@ -335,7 +418,7 @@ mod tests {
             }
         });
         let response = serde_json::to_string(&payload).unwrap();
-        let result = Client::match_response(Ok(response))
+        let result = Client::match_response(Ok(response), false)
             .expect("Should parse new JSON IPC reply with 'data'");
         assert_eq!(result, json!({"version": "0.1.dev"}));
     }
@@ -343,7 +426,8 @@ mod tests {
     #[test]
     fn test_match_response_legacy() {
         let response = "[0, {\"version\": \"0.1.dev\"}]".to_string();
-        let result = Client::match_response(Ok(response)).expect("Should parse legacy IPC reply");
+        let result =
+            Client::match_response(Ok(response), false).expect("Should parse legacy IPC reply");
         assert_eq!(result, json!({"version": "0.1.dev"}));
     }
 
@@ -351,38 +435,44 @@ mod tests {
     fn test_match_response_flexible() {
         let legacy_response = "[0, \"ok\"]".to_string();
         let modern_response = json!({"status": 0, "result": "ok"}).to_string();
-        assert_eq!(Client::match_response(Ok(legacy_response)).unwrap(), "ok");
-        assert_eq!(Client::match_response(Ok(modern_response)).unwrap(), "ok");
+        assert_eq!(
+            Client::match_response(Ok(legacy_response), false).unwrap(),
+            "ok"
+        );
+        assert_eq!(
+            Client::match_response(Ok(modern_response), false).unwrap(),
+            "ok"
+        );
     }
 
     #[test]
     fn test_match_response_errors() {
-        assert!(Client::match_response(Ok("{invalid".into())).is_err());
-        assert!(Client::match_response(Ok("[]".into())).is_err());
+        assert!(Client::match_response(Ok("{invalid".into()), false).is_err());
+        assert!(Client::match_response(Ok("[]".into()), false).is_err());
 
         let missing_status = json!({"result": "ok"}).to_string();
-        assert!(Client::match_response(Ok(missing_status)).is_err());
+        assert!(Client::match_response(Ok(missing_status), false).is_err());
 
         let bad_status = json!({"status": "error", "result": "ok"}).to_string();
-        assert!(Client::match_response(Ok(bad_status)).is_err());
+        assert!(Client::match_response(Ok(bad_status), false).is_err());
 
         let err_resp = json!({"status": 1, "result": "some error"}).to_string();
-        let res = Client::match_response(Ok(err_resp));
+        let res = Client::match_response(Ok(err_resp), false);
         assert!(res.is_err());
         assert!(res.unwrap_err().to_string().contains("some error"));
 
         let weird_err = json!({"status": 1, "result": 123}).to_string();
-        assert!(Client::match_response(Ok(weird_err)).is_err());
+        assert!(Client::match_response(Ok(weird_err), false).is_err());
 
         // Qtile "Session locked." style: plain {"error": "..."} object
         let locked = json!({"error": "Session locked."}).to_string();
-        let res = Client::match_response(Ok(locked));
+        let res = Client::match_response(Ok(locked), false);
         assert!(res.is_err());
         assert!(res.unwrap_err().to_string().contains("Session locked."));
 
         // Legacy array where result is {"error": "..."}
         let locked_legacy = json!([1, {"error": "Session locked."}]).to_string();
-        let res = Client::match_response(Ok(locked_legacy));
+        let res = Client::match_response(Ok(locked_legacy), false);
         assert!(res.is_err());
         assert!(res.unwrap_err().to_string().contains("Session locked."));
     }
@@ -429,5 +519,177 @@ mod tests {
     fn test_client_connect_fail() {
         let path = Some(PathBuf::from("/nonexistent/path/qtile/qtilesocket.:0"));
         assert!(Client::connect_with_path(path).is_err());
+    }
+
+    #[test]
+    fn test_find_sockfile_no_display_falls_back_to_wayland0() {
+        // When display, wayland, and x11 are all None and no socket files exist,
+        // the scanner exhausts all defaults and falls back to wayland-0.
+        let sock = find_sockfile_with_env(
+            None,
+            Some("/tmp/qtile-test-no-socket-000".to_string()),
+            None,
+            None,
+        );
+        assert!(sock.to_str().unwrap().ends_with("qtilesocket.wayland-0"));
+    }
+
+    #[test]
+    fn test_send_fails_without_socket() {
+        let prev_xdg = std::env::var("XDG_CACHE_HOME").ok();
+        let prev_wayland = std::env::var("WAYLAND_DISPLAY").ok();
+        let prev_display = std::env::var("DISPLAY").ok();
+        std::env::set_var("XDG_CACHE_HOME", "/tmp/qtile-no-such-cache-send-test");
+        std::env::set_var("WAYLAND_DISPLAY", "no-such-display-send-99");
+        std::env::remove_var("DISPLAY");
+
+        let result = Client::send("{}".to_string());
+
+        match prev_xdg {
+            Some(v) => std::env::set_var("XDG_CACHE_HOME", v),
+            None => std::env::remove_var("XDG_CACHE_HOME"),
+        }
+        match prev_wayland {
+            Some(v) => std::env::set_var("WAYLAND_DISPLAY", v),
+            None => std::env::remove_var("WAYLAND_DISPLAY"),
+        }
+        match prev_display {
+            Some(v) => std::env::set_var("DISPLAY", v),
+            None => std::env::remove_var("DISPLAY"),
+        }
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_match_response_unexpected_message_type() {
+        let payload = json!({
+            "message_type": "error",
+            "content": {"detail": "bad"}
+        });
+        let response = serde_json::to_string(&payload).unwrap();
+        let result = Client::match_response(Ok(response), false);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("unexpected envelope message_type"));
+    }
+
+    #[test]
+    fn test_match_response_legacy_single_element_ok() {
+        // Array with status=0 and no second element → result is null.
+        let result = Client::match_response(Ok("[0]".to_string()), false);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Value::Null);
+    }
+
+    #[test]
+    fn test_match_response_legacy_non_number_status() {
+        let result = Client::match_response(Ok(r#"["bad_status"]"#.to_string()), false);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("status is not a number"));
+    }
+
+    #[test]
+    fn test_match_response_unknown_top_level_type() {
+        let result = Client::match_response(Ok("\"just_a_string\"".to_string()), false);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Unknown top-level"));
+    }
+
+    #[test]
+    fn test_match_response_error_result_array() {
+        // format_error_result with an array of strings.
+        let resp = json!({"status": 1, "result": ["error", " details"]}).to_string();
+        let result = Client::match_response(Ok(resp), false);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("error details"), "got: {msg}");
+
+        // format_error_result with an array containing a non-string element.
+        let resp_mixed = json!({"status": 1, "result": ["msg", 42]}).to_string();
+        let result_mixed = Client::match_response(Ok(resp_mixed), false);
+        assert!(result_mixed.is_err());
+        let msg_mixed = result_mixed.unwrap_err().to_string();
+        assert!(msg_mixed.contains("msg42"), "got: {msg_mixed}");
+    }
+
+    #[test]
+    fn test_match_response_error_result_object_no_error_key() {
+        // format_error_result with an object that has no "error" key falls back to JSON.
+        let resp = json!({"status": 1, "result": {"detail": "some info"}}).to_string();
+        let result = Client::match_response(Ok(resp), false);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("detail"), "got: {msg}");
+    }
+
+    #[cfg(feature = "framing")]
+    #[test]
+    fn test_send_request_framed_success() {
+        use std::io::{Read, Write};
+        use std::os::unix::net::UnixListener;
+        use std::thread;
+
+        let tmp = std::env::temp_dir();
+        let unique = std::process::id();
+        let display_name = format!("framing-{unique}");
+        // Discovery builds $XDG_CACHE_HOME/qtile/qtilesocket.<display>, so the
+        // listener must be bound inside that exact path.
+        let cache_dir = tmp.join(format!("qtile-frame-test-{unique}"));
+        let qtile_dir = cache_dir.join("qtile");
+        let socket_path = qtile_dir.join(format!("qtilesocket.{display_name}"));
+        std::fs::create_dir_all(&qtile_dir).unwrap();
+
+        let listener = UnixListener::bind(&socket_path).unwrap();
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut header = [0u8; 4];
+            stream.read_exact(&mut header).unwrap();
+            let len = u32::from_be_bytes(header) as usize;
+            let mut body = vec![0u8; len];
+            stream.read_exact(&mut body).unwrap();
+            // Reply with a minimal framed response
+            let reply = r#"[0,"ok"]"#;
+            let reply_bytes = reply.as_bytes();
+            stream
+                .write_all(&(reply_bytes.len() as u32).to_be_bytes())
+                .unwrap();
+            stream.write_all(reply_bytes).unwrap();
+        });
+
+        let prev_xdg = std::env::var("XDG_CACHE_HOME").ok();
+        let prev_wayland = std::env::var("WAYLAND_DISPLAY").ok();
+        std::env::set_var("XDG_CACHE_HOME", &cache_dir);
+        std::env::set_var("WAYLAND_DISPLAY", &display_name);
+
+        let result = Client::send_request(r#"[[], "status", [], {}, true]"#.to_string(), true);
+
+        match prev_xdg {
+            Some(v) => std::env::set_var("XDG_CACHE_HOME", v),
+            None => std::env::remove_var("XDG_CACHE_HOME"),
+        }
+        match prev_wayland {
+            Some(v) => std::env::set_var("WAYLAND_DISPLAY", v),
+            None => std::env::remove_var("WAYLAND_DISPLAY"),
+        }
+
+        server.join().unwrap();
+        std::fs::remove_dir_all(&cache_dir).ok();
+
+        assert!(
+            result.is_ok(),
+            "Framed send_request should succeed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), r#"[0,"ok"]"#);
     }
 }
